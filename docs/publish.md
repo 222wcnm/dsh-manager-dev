@@ -8,9 +8,9 @@ GitHub 上操作的事项与步骤；当前状态：**本地已备好发布副�
 | 仓库 | 地址 | 状态 |
 |------|------|------|
 | 开发仓库（**私有**，完整历史） | https://github.com/222wcnm/dsh-manager-dev | 已建仓并推送（main 分支，2026-08-14） |
-| 发布仓库（**公开**，单提交快照） | https://github.com/222wcnm/dsh-manager（计划名） | 尚未创建 |
+| 发布仓库（**公开**，单提交快照） | https://github.com/222wcnm/dsh-manager | **已公开发布**（2026-08-14；单提交 `v0.1.0`，五个话题：dsh / dsh-plugin / deepseek-harness / chrome-extension / native-messaging） |
 
-日常开发只推私有开发仓库；公开发布时才按下方步骤推送发布副本。
+日常开发只推私有开发仓库；发布新版本时重建发布副本并推公开仓库（`build-publish.ps1` + push）。
 
 ## 发布物剔除清单（build-publish.ps1 自动执行）
 
