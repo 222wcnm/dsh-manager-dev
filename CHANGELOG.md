@@ -36,6 +36,17 @@
   后才应答 running）；新增 `docs/upstream-feedback.md`（M5 GitHub Discussions 帖子
   草稿，待用户账号发布）。
 
+### Changed
+- **README 全面重写**（用户要求，2026-08-14）：改为幽默/抽象风格，开头戏仿网络
+  热梗句式快速勾勒使用场景与用户习惯（「不爱用 dsh web UI 的请划走 / 不会或者
+  懒得敲终端启动命令的请划走」）；删除冗长的开源论述与目录/路线图大表格，保留
+  功能、三步安装、配置、精简 FAQ 与安全/品牌一行声明；**新增「测试环境」章节**——
+  列明 Windows 11 + Chrome/Edge（冒烟 339 PASS+1 SKIP）、Kali WSL2 Linux（346/346）、
+  真实 dsh 0.1.0-rc.6 集成、verify-cdp 28 断言、插件单测 21 项，以及未实测项
+  （macOS、Firefox 运行时、商店未上架）。
+- design.md §15 记录范围决定：Chrome Web Store 上架与 macOS/Firefox 适配**暂缓**
+  （无对应设备，CHROMEWEBSTORE.md 保留为将来素材）。
+
 ### Fixed
 - 徽标动态端口分支死代码：`Number(s.port) || DEFAULT_SETTINGS.port` 会把合法设置值
   0 吞掉（port 0 时徽标错误地探测 3080）——改为 `Number.isFinite` 校验后原样使用；

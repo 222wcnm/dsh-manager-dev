@@ -924,8 +924,10 @@ powershell/netstat，只读，不接管不停止）与 `EXTERNAL_UNMANAGED` 保�
 | **M1.2 外部实例接管**（§6.7） | adopt 动作：pid+port 双重匹配回写 run 记录，接管后 stop/restart 可用、重启按原 argv 重放；popup「接管」按钮；popup UI 对齐 dsh Web UI 设计令牌 | smoke 场景 19 通过 |
 | **M2 生命周期插件** | `dsh-lifecycle`（shutdown + health）；宿主 stop/restart 优雅链；popup 富状态与插件安装提示 | stop 走优雅路径、全程无 taskkill、会话无损；health 200 且字段正确（§14.2.9） |
 | **M3 体验增强** | restart 按钮、日志查看与复制、启动后自动开 UI 开关、徽标周期刷新（alarms）；Web UI 页面内管理面板（页面内停止/重启） | 完成（2026-08-14：`logs` 动作与日志查看页 §6.3/§8.4 + 页面内管理面板 §8.6（content script 方案，替代 dsh client 插件：外部插件无独立构建路径，见 §8.6 决策）；smoke 场景 24 + verify-cdp 自动验收） |
-| **M4 跨平台/跨浏览器** | macOS/Linux（SIGTERM 优雅路径、`~/.config` 状态目录、`kill` 代替 taskkill）；Firefox（`allowed_extensions` 已预留）；`--port 0` 端口发现 | 进行中：`--port 0` 已支持并对真实 dsh 实测通过（2026-08-14，§6.3 start 第 9 步 + smoke 场景 25 + smoke-real 扩展段）；Firefox Windows 宿主注册与 gecko id 已就绪（install/uninstall 含 Mozilla 注册表项，扩展运行时未实测）；**Linux 已实测通过（Kali WSL2，smoke 场景 26 真实 /proc 路径）**；macOS 待实测 |
+| **M4 跨平台/跨浏览器** | macOS/Linux（SIGTERM 优雅路径、`~/.config` 状态目录、`kill` 代替 taskkill）；Firefox（`allowed_extensions` 已预留）；`--port 0` 端口发现 | 进行中：`--port 0` 已支持并对真实 dsh 实测通过（2026-08-14，§6.3 start 第 9 步 + smoke 场景 25 + smoke-real 扩展段）；Firefox Windows 宿主注册与 gecko id 已就绪（install/uninstall 含 Mozilla 注册表项，扩展运行时未实测）；**Linux 已实测通过（Kali WSL2，smoke 场景 26 真实 /proc 路径）**；macOS 与 Firefox 运行时待实测——**暂缓**（无对应设备，2026-08-14 用户决定） |
 | **M5（可选）上游贡献** | 向 deepseek-harness 提 `dsh server start/stop/status` 子命令或官方 lifecycle 插件 PR，本项目宿主改为优先调用官方面 | 上游采纳或明确拒绝 |
+
+注（2026-08-14 用户决定）：**Chrome Web Store 上架与 macOS/Firefox 适配暂缓**；README 已重写为幽默风格并新增「测试环境」章节（CHROMEWEBSTORE.md 保留为将来上架素材）。
 
 ---
 

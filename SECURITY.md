@@ -22,4 +22,4 @@
 - 安装器会写入 HKCU 注册表（Chrome/Edge 的 `NativeMessagingHosts\com.dsh.manager`），仅当前用户、无需管理员权限。
 - 宿主以当前用户身份启动/停止进程，不提升权限、不执行 shell 字符串拼接命令。
 
-请仅在可信环境中自行安装，并在使用前阅读 [README](README.md) 的「风险自担」声明。
+请仅在可信环境中自行安装，并在使用前阅读 [README](README.md) 文末免责声明。

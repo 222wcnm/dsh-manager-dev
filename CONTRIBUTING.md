@@ -11,7 +11,7 @@ DeepSeek Harness（dsh）的 Web 服务生命周期——在浏览器里一键�
 `GET /_lifecycle/health` 健康端点。
 
 > 本项目是**非官方**社区工具，与 DeepSeek（深度求索）无隶属、无背书关系。详见
-> [NOTICE](../NOTICE) 与 [README](../README.md) 顶部免责声明。
+> [NOTICE](../NOTICE) 与 [README](../README.md) 文末免责声明。
 
 ## 权威文档（改动前必读）
 
