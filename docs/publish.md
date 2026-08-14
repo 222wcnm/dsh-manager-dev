@@ -21,19 +21,30 @@ GitHub 上操作的事项与步骤；当前状态：**本地已备好发布副�
 ## 发布步骤（方案 A：另起新仓、单提交）
 
 发布副本位于仓库外的 `dsh-manager-publish/`（单提交 `v0.1`，与主仓库开发历史解耦）。
+发布物只带面向使用者的正式版本条目，CHANGELOG 由脚本以 `tools/publish/release-changelog.md`
+替换（开发期流水账留在开发仓库）。
 
-1. 在 GitHub 新建空仓库（**不要**勾选 README/.gitignore/LICENSE 初始化）。
-2. 在发布副本内：
+1. （重）建发布副本：在开发仓库根目录运行
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\publish\build-publish.ps1
+   ```
+
+   参数：`-Version`（默认 0.1.0）、`-PublishDir`（默认仓库同级 `dsh-manager-publish`）。
+   发布新版本前：先在 `tools/publish/release-changelog.md` 加好正式条目，再跑脚本。
+
+2. 在 GitHub 新建空仓库（**不要**勾选 README/.gitignore/LICENSE 初始化）。
+3. 在发布副本内：
 
    ```powershell
    git remote add origin https://github.com/<你的账号>/dsh-manager.git
    git push -u origin main
    ```
 
-3. 在仓库 Settings → Topics 填上上表五个话题；描述可写：
+4. 在仓库 Settings → Topics 填上上表五个话题；描述可写：
    「DSH Manager — 浏览器一键启动/停止/重启 DeepSeek Harness（dsh）web 服务」。
-4. 发布前自查（每次发布前重跑）：
-   - 发布副本内 `git status` 干净、`git log --oneline` 仅 1 条；
+5. 发布前自查（每次发布前重跑）：
+   - 发布副本内 `git status` 干净、`git log --oneline` 仅 1 条、CHANGELOG 为正式版本条目；
    - `git ls-files` 中无 `extension-key.json` / `.extension-id.json` / `com.dsh.manager.reg`；
    - 冒烟 `node native-host/test/smoke.js` 通过——**全新克隆预期 333 PASS + 4 SKIP**
      （3 项本地产物核对 SKIP + 1 项 POSIX 场景 SKIP，smoke 已自足化；本机开发目录
