@@ -259,13 +259,32 @@ function staticChecks() {
     const digest = crypto.createHash('sha256').update(der).digest().subarray(0, 16);
     let id = '';
     for (const b of digest) id += String.fromCharCode(97 + (b >> 4)) + String.fromCharCode(97 + (b & 15));
-    const txtId = fs.readFileSync(path.join(ROOT, 'EXTENSION_ID.txt'), 'utf8').trim();
-    const extKeyJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'extension', 'extension-key.json'), 'utf8'));
-    const dotIdJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'native-host', '.extension-id.json'), 'utf8'));
-    record('静态', 'manifest key 独立计算 ID === EXTENSION_ID.txt', id === txtId, `computed=${id} txt=${txtId}`);
-    record('静态', 'extension-key.json id === 计算 ID', extKeyJson.id === id, extKeyJson.id);
-    record('静态', 'extension-key.json key === manifest key', extKeyJson.key === key, '');
-    record('静态', 'native-host/.extension-id.json === 计算 ID', dotIdJson.extensionId === id, dotIdJson.extensionId);
+
+    // 本地产物（EXTENSION_ID.txt / extension-key.json / .extension-id.json）由
+    // install.ps1/keygen.js 现场生成且不入库：存在时核对一致性，缺失时记 SKIP
+    // （全新克隆没有这些文件，不构成失败）。
+    const txtPath = path.join(ROOT, 'EXTENSION_ID.txt');
+    if (fs.existsSync(txtPath)) {
+      const txtId = fs.readFileSync(txtPath, 'utf8').trim();
+      record('静态', 'manifest key 独立计算 ID === EXTENSION_ID.txt', id === txtId, `computed=${id} txt=${txtId}`);
+    } else {
+      recordSkip('静态', 'manifest key 独立计算 ID === EXTENSION_ID.txt', 'EXTENSION_ID.txt 不存在（全新克隆，本地产物跳过）');
+    }
+    const extKeyPath = path.join(ROOT, 'extension', 'extension-key.json');
+    if (fs.existsSync(extKeyPath)) {
+      const extKeyJson = JSON.parse(fs.readFileSync(extKeyPath, 'utf8'));
+      record('静态', 'extension-key.json id === 计算 ID', extKeyJson.id === id, extKeyJson.id);
+      record('静态', 'extension-key.json key === manifest key', extKeyJson.key === key, '');
+    } else {
+      recordSkip('静态', 'extension-key.json 一致性核对', 'extension-key.json 不存在（全新克隆，本地产物跳过）');
+    }
+    const dotIdPath = path.join(ROOT, 'native-host', '.extension-id.json');
+    if (fs.existsSync(dotIdPath)) {
+      const dotIdJson = JSON.parse(fs.readFileSync(dotIdPath, 'utf8'));
+      record('静态', 'native-host/.extension-id.json === 计算 ID', dotIdJson.extensionId === id, dotIdJson.extensionId);
+    } else {
+      recordSkip('静态', 'native-host/.extension-id.json === 计算 ID', '.extension-id.json 不存在（全新克隆，本地产物跳过）');
+    }
     record('静态', 'ID 字符集 [a-p]{32}', /^[a-p]{32}$/.test(id), id);
 
     // M4 Firefox：manifest 声明 gecko id，且宿主模板 allowed_extensions 同时含
@@ -284,13 +303,13 @@ function staticChecks() {
       record('静态', '宿主模板 allowed_extensions 含 Chrome ID 与 gecko id', false, e.message);
     }
 
-    // 全部 JSON 可解析
+    // 全部 JSON 可解析（仅入库文件；本地产物存在时追加核对）
     const jsonFiles = [
       path.join(ROOT, 'extension', 'manifest.json'),
-      path.join(ROOT, 'extension', 'extension-key.json'),
-      path.join(ROOT, 'native-host', '.extension-id.json'),
       path.join(ROOT, 'native-host', 'com.dsh.manager.json.template'),
     ];
+    if (fs.existsSync(extKeyPath)) jsonFiles.push(extKeyPath);
+    if (fs.existsSync(dotIdPath)) jsonFiles.push(dotIdPath);
     for (const f of jsonFiles) {
       try { JSON.parse(fs.readFileSync(f, 'utf8')); record('静态', 'JSON 可解析: ' + path.relative(ROOT, f), true, ''); }
       catch (e) { record('静态', 'JSON 可解析: ' + path.relative(ROOT, f), false, e.message); }
