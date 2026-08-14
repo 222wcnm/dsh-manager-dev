@@ -908,8 +908,16 @@ function resolveDshBin() {
     if (!r.error && r.status === 0 && r.stdout) {
       const prefix = String(r.stdout).trim();
       if (prefix) {
-        const cand = path.join(prefix, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
-        if (fs.existsSync(cand)) return cand;
+        // POSIX npm 全局布局为 <prefix>/lib/node_modules；Windows 为 <prefix>/node_modules
+        const candidates = IS_WIN
+          ? [path.join(prefix, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')]
+          : [
+            path.join(prefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+            path.join(prefix, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+          ];
+        for (const cand of candidates) {
+          if (fs.existsSync(cand)) return cand;
+        }
       }
     } else if (r.error) {
       log('npm prefix -g 不可用，跳过: ' + r.error.message);
@@ -917,27 +925,48 @@ function resolveDshBin() {
   } catch (err) {
     log('npm prefix -g 探测失败，跳过: ' + (err && err.message));
   }
-  // e. where dsh（同上，可能 EPERM，必须捕获）
+  // e. 平台化定位 dsh 启动器（Windows: where dsh；POSIX: command -v dsh + realpath）
   try {
-    const r = spawnSync('where', ['dsh'], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 10000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
+    const r = IS_WIN
+      ? spawnSync('where', ['dsh'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 10000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      : spawnSync('sh', ['-c', 'command -v dsh'], {
+        // command 是 POSIX shell 内建；最小发行版（如 Kali 精简镜像）可能没有
+        // /usr/bin/command 独立二进制，经 sh 调用最稳
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 10000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
     if (!r.error && r.status === 0 && r.stdout) {
       const lines = String(r.stdout).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       for (const line of lines) {
-        if (/dsh\.cmd$/i.test(line) || /^dsh(\.exe)?$/i.test(path.basename(line))) {
-          const cand = path.join(path.dirname(line), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+        if (IS_WIN) {
+          if (/dsh\.cmd$/i.test(line) || /^dsh(\.exe)?$/i.test(path.basename(line))) {
+            const cand = path.join(path.dirname(line), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+            if (fs.existsSync(cand)) return cand;
+          }
+        } else {
+          // POSIX：启动器通常是 prefix/bin/dsh 符号链接 → lib/bin.js，realpath 直取本体
+          try {
+            const real = fs.realpathSync(line);
+            if (real && /[\\/]bin\.js$/.test(real) && fs.existsSync(real)) return real;
+          } catch (err2) {
+            // 非符号链接，走 npm 布局回退
+          }
+          const cand = path.join(path.dirname(line), '..', 'lib', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
           if (fs.existsSync(cand)) return cand;
         }
       }
     } else if (r.error) {
-      log('where dsh 不可用，跳过: ' + r.error.message);
+      log((IS_WIN ? 'where dsh' : 'command -v dsh') + ' 不可用，跳过: ' + r.error.message);
     }
   } catch (err) {
-    log('where dsh 探测失败，跳过: ' + (err && err.message));
+    log((IS_WIN ? 'where dsh' : 'command -v dsh') + ' 探测失败，跳过: ' + (err && err.message));
   }
   return null;
 }

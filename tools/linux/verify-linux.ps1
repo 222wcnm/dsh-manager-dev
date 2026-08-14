@@ -19,13 +19,20 @@
 .PARAMETER NodeVersion
     便携 Node 版本（默认 22.16.0），经 NODE_VERSION 环境变量传给发行版内脚本。
 
+.PARAMETER E2E
+    冒烟通过后追加运行 run-e2e-linux.sh：发行版内真实安装 dsh + install.sh +
+    经已安装宿主拉起/停止真实 dsh web + uninstall.sh 清理（输出到 .linux-e2e.log）。
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E
 #>
 [CmdletBinding()]
 param(
     [string]$Distro = 'kali-linux',
-    [string]$NodeVersion = '22.16.0'
+    [string]$NodeVersion = '22.16.0',
+    [switch]$E2E
 )
 
 $repoWin = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -54,5 +61,17 @@ if ($runCode -eq 0) {
     Write-Host 'WSL Linux 冒烟验证通过（明细见 .linux-smoke.log）' -ForegroundColor Green
 } else {
     Write-Host ('WSL Linux 冒烟验证失败（exit=' + $runCode + '，明细见 .linux-smoke.log）') -ForegroundColor Red
+    exit $runCode
 }
-exit $runCode
+
+if ($E2E) {
+    & wsl -d $Distro -- bash "$repoWsl/tools/linux/run-e2e-linux.sh"
+    $e2eCode = $LASTEXITCODE
+    if ($e2eCode -eq 0) {
+        Write-Host 'WSL Linux 真实安装 E2E 通过（明细见 .linux-e2e.log）' -ForegroundColor Green
+    } else {
+        Write-Host ('WSL Linux 真实安装 E2E 失败（exit=' + $e2eCode + '，明细见 .linux-e2e.log）') -ForegroundColor Red
+    }
+    exit $e2eCode
+}
+exit 0

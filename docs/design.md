@@ -150,8 +150,8 @@ DeepSeek Harness（以下简称 dsh，npm 包 `@deepseek-ai/dsh`）的 Web 界�
 |------|------|------|
 | 浏览器扩展 | `extension/` | UI、状态展示、发起 native 请求、探活、打开 UI |
 | Native 宿主 | `native-host/host.js` | 命令执行、进程管理、状态判定 |
-| 安装器 | `native-host/install.ps1` | 生成宿主 manifest（自动计算扩展 ID）、写注册表、生成宿主配置 |
-| 卸载器 | `native-host/uninstall.ps1` | 停掉 dsh、清理注册表与状态文件 |
+| 安装器 | `native-host/install.ps1`（Windows）/ `install.sh`（Linux/macOS，M4） | 生成宿主 manifest（自动计算扩展 ID）、注册 Native Messaging 宿主（注册表 / 用户级清单文件）、生成宿主配置 |
+| 卸载器 | `native-host/uninstall.ps1` / `uninstall.sh` | 停掉 dsh、清理注册表（或浏览器清单）与状态文件 |
 | **dsh 生命周期插件** | `plugin/dsh-lifecycle/` | 进程内优雅停机端点 `POST /_lifecycle/shutdown` + 健康端点 `GET /_lifecycle/health`（M2；可选安装，宿主自动降级，§7） |
 
 ### 4.2 关键设计原则
@@ -741,9 +741,9 @@ Popup ◀── {state:"stopped"}
 
 ---
 
-## 10. 安装与注册（install.ps1 / uninstall.ps1）
+## 10. 安装与注册（install.ps1 / uninstall.ps1 / install.sh / uninstall.sh）
 
-### 10.1 install.ps1 流程
+### 10.1 install.ps1 流程（Windows）
 
 1. 参数：`-ExtensionId <id>`（可省略；省略时从 `extension/manifest.json` 的 `key` 自动计算，见 §10.2）。
 2. 检查 Node（`node -v`）与 dsh（`dsh --version`），缺失则给出安装指引并中止。
@@ -751,7 +751,26 @@ Popup ◀── {state:"stopped"}
 4. 生成 `host.cmd`（写死本机 node.exe 与 host.js 绝对路径）与 `com.dsh.manager.json`（注入扩展 ID 与 Firefox gecko id，M4）。
 5. 写注册表：Chrome + Edge + Firefox 三条（HKCU，失败时提示手动导入 `.reg` 文件，安装器同时导出 `com.dsh.manager.reg` 备用）。
 6. 打印验收指引：「打开扩展 popup，应显示 stopped 而非 HOST_NOT_INSTALLED」。
-7. （可选）安装生命周期插件：见 `plugin/dsh-lifecycle/README.md`（本地包安装或 cordis.patch.yml 挂载）；未安装时宿主自动降级 taskkill，功能不受影响。
+7. （可选）安装生命周期插件：见 `plugin/dsh-lifecycle/README.md`（本地包安装或 cordis.patch.yml 挂载）；未安装时宿主自动降级强停，功能不受影响。
+
+### 10.1a install.sh 流程（Linux / macOS，M4）
+
+与 install.ps1 同构，注册方式为写用户级 NativeMessagingHosts 清单文件（无需 sudo）：
+
+1. 参数：`--extension-id <id>`（缺省自动计算）、`--dry-run`（预演）。
+2. 前置检查 node 与 dsh（`command -v`，仅存在性）。
+3. 创建状态根目录（Linux `$XDG_CONFIG_HOME/dsh-manager` 或 `~/.config/dsh-manager`；macOS `~/Library/Application Support/dsh-manager`）下 `{host,run,logs}`。
+4. 生成 `host.sh`（`#!/bin/sh` + `exec "node" "host.js" "$@"`，写死绝对路径、chmod +x）与 `com.dsh.manager.json`（JSON 转义由 node 完成；allowed_extensions 同含 Chrome ID 与 gecko id）。
+5. 写入四份浏览器注册（幂等）：
+   - `~/.config/google-chrome/NativeMessagingHosts/com.dsh.manager.json`
+   - `~/.config/chromium/NativeMessagingHosts/com.dsh.manager.json`
+   - `~/.config/microsoft-edge/NativeMessagingHosts/com.dsh.manager.json`
+   - `~/.mozilla/native-messaging-hosts/com.dsh.manager.json`（Firefox）
+6. 打印验收指引（同 Windows）。
+
+uninstall.sh 与 uninstall.ps1 同构：宿主 stop 动作（复用全套防护链）→ 删四份浏览器注册 → `--keep-logs` 可选备份 → 删状态目录。
+
+**验证状态**：install.sh/uninstall.sh 在 Kali WSL2 **真实安装 E2E 实测通过**（tools/linux/run-e2e-linux.sh：npm i -g 真实 dsh → 安装 → 清单断言 → 经已安装 host.sh 拉起真实 dsh web start/status/指纹/stop → 卸载清理；2026-08-14）。macOS 同脚本复用（`uname -s` 分支），未实测。
 
 ### 10.2 固定扩展 ID
 
@@ -804,6 +823,8 @@ dsh-manager/
 │  ├─ com.dsh.manager.json.template
 │  ├─ install.ps1
 │  ├─ uninstall.ps1
+│  ├─ install.sh                  # Linux/macOS 安装器（M4，用户级 NativeMessagingHosts 清单）
+│  ├─ uninstall.sh                # Linux/macOS 卸载器（M4）
 │  └─ test/
 │     └─ smoke.ps1               # 离线冒烟：直接管道喂 JSON 测宿主（见 §14）
 ├─ plugin/                       # M2 生命周期插件（独立 npm 包，dsh 侧）

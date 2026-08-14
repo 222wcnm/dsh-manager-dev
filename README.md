@@ -37,18 +37,27 @@ npm i -g @deepseek-ai/dsh
 
 **第一步**，跑安装脚本（先预演，再正式装）：
 
+Windows（PowerShell）：
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\native-host\install.ps1 -DryRun
 powershell -ExecutionPolicy Bypass -File .\native-host\install.ps1
+```
+
+Linux / macOS（sh，用户级注册、无需 sudo）：
+
+```sh
+sh native-host/install.sh --dry-run
+sh native-host/install.sh
 ```
 
 **第二步**，`chrome://extensions`（或 `edge://extensions`）→ 打开「开发者模式」→ 「加载已解压的扩展程序」→ 选本仓库 `extension` 目录。浏览器正在跑的话先**完全退出重启**再加载（宿主注册只在浏览器启动时读取）。
 
 **第三步**，点工具栏图标 → 「启动」，就绪后自动打开 Web UI。
 
-卸载：`powershell -ExecutionPolicy Bypass -File .\native-host\uninstall.ps1`（加 `-KeepLogs` 先备份日志再删数据）。
+卸载：Windows 为 `powershell -ExecutionPolicy Bypass -File .\native-host\uninstall.ps1`；Linux / macOS 为 `sh native-host/uninstall.sh`（都支持保留日志：`-KeepLogs` / `--keep-logs`）。
 
-> 目前主要面向 Windows + Chrome / Edge。Linux 平台层已实测；macOS、Firefox 运行时未实测——详见下方「测试环境」。
+> Windows 与 Linux 已实测；macOS 安装脚本同源（`uname` 分支）但未实测、Firefox 运行时未实测——详见下方「测试环境」。
 
 ## 配置
 

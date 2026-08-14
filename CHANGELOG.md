@@ -46,6 +46,18 @@
   （macOS、Firefox 运行时、商店未上架）。
 - design.md §15 记录范围决定：Chrome Web Store 上架与 macOS/Firefox 适配**暂缓**
   （无对应设备，CHROMEWEBSTORE.md 保留为将来素材）。
+- **Linux 安装器（M4）**：新增 `native-host/install.sh` / `uninstall.sh`（POSIX sh，
+  与 ps1 同构）——状态目录按 design §6.8 分支（`$XDG_CONFIG_HOME`/`~/.config` /
+  `~/Library/Application Support`）；生成 `host.sh` 启动包装 + 宿主清单（JSON 转义
+  交 node）；用户级注册四份浏览器 NativeMessagingHosts 清单（google-chrome /
+  chromium / microsoft-edge / .mozilla，无需 sudo）；uninstall 经宿主 stop 动作
+  复用全套防护链；`--dry-run`/`--extension-id`/`--keep-logs` 支持。host.js
+  resolveDshBin 修复两处 POSIX 缺陷：npm 全局包布局 `prefix/lib/node_modules`
+  （原仅拼 Windows 布局 `prefix/node_modules`）、`command -v dsh` 改经 `sh -c`
+  （最小发行版无 /usr/bin/command 独立二进制）。README 安装章节
+  增加 Linux/macOS 命令块；新增 `tools/linux/run-e2e-linux.sh`（真实安装 E2E：
+  装真实 dsh → install.sh → 清单断言 → 经已安装宿主 start/status/指纹/stop →
+  uninstall 清理），`verify-linux.ps1 -E2E` 可一键触发。
 
 ### Fixed
 - 徽标动态端口分支死代码：`Number(s.port) || DEFAULT_SETTINGS.port` 会把合法设置值
