@@ -3,7 +3,7 @@
 > dsh 的浏览器开关：一键启动 / 停止 / 重启 `dsh web`，不碰终端。
 
 答应我，不爱用 dsh web UI 的请划走👉
-不会或者懒得敲终端启动命令的请划走😡
+不会或者懒得敲终端启动命令的请留下🙏
 
 我每天的固定节目是跟 dsh web 唠嗑🤖
 我唯一不想开的窗口是终端🙅
@@ -108,6 +108,7 @@ popup 设置里换端口，或设成 `0` 自动分配。占用者若是另一个
 - 详细设计（架构 / 协议 / 安全 / 路线图）：[docs/design.md](docs/design.md)
 - 开发、测试命令与提交规范：[CONTRIBUTING.md](CONTRIBUTING.md)
 - dsh 本体：[github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
+- 构建者：本项目完全由 **deepseek-V4-pro-0813** 在 dsh 中构建，视觉辅助模型为 **gemini-3.5-flash-lite**
 - 许可证：MIT（[LICENSE](LICENSE)）。鲸鱼 logo 等品牌素材版权归 DeepSeek 所有、不随 MIT 授权，见 [NOTICE](NOTICE)。
 
 > 非官方社区工具，与 DeepSeek 官方无隶属关系；极端情况下强制停止可能丢最近几秒会话状态，使用前自行评估。
