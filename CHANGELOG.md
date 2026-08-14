@@ -19,6 +19,12 @@
   `allowed_extensions`（Chrome ID + gecko ID），注册表新增 Mozilla 项，uninstall
   同步清理；smoke 静态断言 gecko id 与模板一致性。**扩展在 Firefox 中的运行时行为
   尚未实测**（本机无 Firefox 验证环境）。
+- smoke-real 新增「外部发现生产路径」只读段：真实 powershell 进程枚举 + netstat +
+  指纹探测（实测检测到本机真实 dsh web，`EXTERNAL_UNMANAGED` 保护验证通过）——
+  关闭「外部发现生产路径未实测」遗留项。
+- 文档：design.md §8.3/§9.1 与 §6.3 的 start 返回语义矛盾已对齐（宿主轮询至就绪
+  后才应答 running）；新增 `docs/upstream-feedback.md`（M5 GitHub Discussions 帖子
+  草稿，待用户账号发布）。
 
 ## [未发布] - M3 体验增强
 

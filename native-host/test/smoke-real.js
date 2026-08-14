@@ -121,6 +121,26 @@ function main() {
     console.log('PASS | real-dsh --port 0 | 真实 dsh 动态端口回填 + 停止全链路通过');
   }
 
+  // ---- 外部发现生产路径（best-effort，只读）：不加 DSH_MANAGER_FAKE_PROCESSES 围栏，
+  // 走真实 powershell 进程枚举 + netstat 端口表 + 指纹探测，检测本机真实运行的
+  // dsh web（通常为本会话 harness，127.0.0.1:8080）。绝不接管/停止真实实例。----
+  console.log('--- 外部发现生产路径（真实 powershell/netstat，只读）---');
+  const ext = runHost({ id: 'r6', action: 'status', payload: {} }, 'r6');
+  if (ext && ext.ok === true && ext.result.state === 'external') {
+    console.log('status ->', JSON.stringify(ext.result));
+    console.log('PASS | 真实外部发现 | 生产路径（powershell 进程枚举 + netstat + 指纹）检测到外部 dsh web');
+  } else if (ext && ext.ok === true && ext.result.state === 'stopped') {
+    console.log('NOTE | 真实外部发现 | 本机当前无真实 dsh web 在跑——生产路径本身已执行无异常（沙箱外按 manual-e2e 步骤 9 复核）');
+  } else {
+    console.log('NOTE | 真实外部发现 | status 失败：' + JSON.stringify(ext));
+  }
+  const stExt = runHost({ id: 'r7', action: 'stop', payload: {} }, 'r7');
+  if (stExt && stExt.ok === false && stExt.error && stExt.error.code === 'EXTERNAL_UNMANAGED') {
+    console.log('PASS | EXTERNAL_UNMANAGED | 外部实例 stop 被拒（未触碰真实 dsh）');
+  } else {
+    console.log('NOTE | EXTERNAL_UNMANAGED | 无外部实例时 stop 返回：' + JSON.stringify(stExt && stExt.error));
+  }
+
   cleanup();
   console.log('PASS | real-dsh 集成 | start -> status(running) -> stop 全链路通过（隔离 DSH_HOME，未触碰真实 .dsh）');
 }

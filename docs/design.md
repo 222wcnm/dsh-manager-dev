@@ -632,7 +632,7 @@ popup「查看日志」打开的全页日志查看器，视觉延续同一套 `-
 职责与约束：
 
 1. **串行化 native 调用**：维护单一 `pending` promise 队列，一次只允许一个 connectNative 连接；并发请求排队（状态模型本身幂等，但串行化可消除锁竞争与 Chrome 多宿主进程）。
-2. 单次 native 往返必须短（目标 < 5s；start 的轮询放宿主侧完成，SW 不等 30s——start 返回的是「已 spawn」ack，后续由 popup 轮询 status，见 §9 时序）。
+2. 单次 native 往返时长按动作区分：**start/restart 的「轮询到就绪」在宿主侧完成**（start ≤30s 端口轮询 + M4 `--port 0` 的 30s 端口发现；restart = stop≤10s + start≤30s 串行），SW 以更长的兜底超时等待应答（start 60s / restart 120s，§8.3.6）——start 返回的就是 `running`（或超时错误），popup 应用结果后由 2s 轮询收敛（与 §6.3 实现一致；§9 时序为早期草稿，若与本节冲突以本节与 §6.3 为准）。
 3. 连接异常处理：`connectNative` 抛 `Specified native messaging host not found` → 向 popup 返回 `HOST_NOT_INSTALLED`，引导运行安装器。
 4. 徽标刷新：`chrome.alarms`（30s）→ 本地 fetch 探活（不惊动宿主）→ 更新 `action.setBadgeText`（绿点/空白）与 title。**M4：settings.port === 0（动态端口）时本地探活不可行，改经 native `status` 判定**（宿主解析实际端口）。
 5. 全部 native 消息走 `chrome.runtime.sendMessage` 的 async 应答（`return true` + `sendResponse`）。
@@ -649,7 +649,7 @@ popup「查看日志」打开的全页日志查看器，视觉延续同一套 `-
   "path": "C:\\Users\\<user>\\AppData\\Local\\dsh-manager\\host\\host.cmd",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://<固定扩展ID>/"],
-  "allowed_extensions": ["<固定扩展ID>"]
+  "allowed_extensions": ["<固定扩展ID>", "<gecko id>"]
 }
 ```
 
@@ -683,6 +683,8 @@ popup「查看日志」打开的全页日志查看器，视觉延续同一套 `-
 
 ### 9.1 一键启动（核心体验）
 
+> **本节为早期草稿，与 §6.3 实现有出入；以 §6.3 为准**：宿主的 start **在宿主侧轮询至就绪（≤30s）后才应答** `running`（`--port 0` 时先做 ≤30s 端口发现再探活），并非「spawn 即返回 starting」；SW 以 start 60s / restart 120s 兜底超时等待完整应答；popup 应用应答结果后以 **2s** 轮询 status 收敛（`starting` 只在应答前由 popup 乐观反馈展示）。
+
 ```
 Popup                     Background SW                Native Host                 dsh
   │  点击「启动」              │                            │                        │
@@ -692,14 +694,14 @@ Popup                     Background SW                Native Host              
   │                          │                            ├─ 抢锁/解析/校验         │
   │                          │                            ├─spawn(detached)────────▶│ 开始加载
   │                          │                            │   写 run 记录 + 日志    │
-  │                          │◀─ {ok, state:"starting"} ──┤                        │
-  │◀─sendResponse(starting)──│                            │                        │
-  │  每 1s: sendMessage(status)──▶ 每 1s: connectNative ──▶│ 读 run 记录 + 探活      │
-  │                          │◀─ {state:"running"} ───────┤◀─ GET / 200 ───────────┤
-  │  green 状态 + tabs.create("http://127.0.0.1:3080")                                │
+  │                          │                            ├─ 轮询探活（≤30s；       │
+  │                          │                            │   --port 0 先发现端口） │
+  │                          │◀─ {ok, state:"running"} ────┤◀─ GET / 200 ───────────┤
+  │◀─sendResponse(running)───│                            │                        │
+  │  green 状态 + tabs.create("http://127.0.0.1:3080")     │                        │
 ```
 
-要点：SW 不等待宿主轮询；宿主 start 只负责 spawn + 写记录即返回 `starting`；就绪确认由 popup 轮询 status 完成（popup 关闭也无碍——下次打开重新 status）。
+要点：SW 不等待超时兜底之外的轮询——轮询编排权在宿主；popup 在应答前以乐观反馈展示 `starting`（按钮转圈 + 进度条），应答后应用终态并由 2s 轮询收敛（popup 关闭也无碍——下次打开重新 status）。
 
 ### 9.2 停止
 
@@ -728,8 +730,8 @@ Popup ◀── {state:"stopped"}
 1. 参数：`-ExtensionId <id>`（可省略；省略时从 `extension/manifest.json` 的 `key` 自动计算，见 §10.2）。
 2. 检查 Node（`node -v`）与 dsh（`dsh --version`），缺失则给出安装指引并中止。
 3. 创建 `%LOCALAPPDATA%\dsh-manager\{host,run,logs}`。
-4. 生成 `host.cmd`（写死本机 node.exe 与 host.js 绝对路径）与 `com.dsh.manager.json`（注入扩展 ID）。
-5. 写注册表：Chrome + Edge 两条（HKCU，失败时提示手动导入 `.reg` 文件，安装器同时导出 `com.dsh.manager.reg` 备用）。
+4. 生成 `host.cmd`（写死本机 node.exe 与 host.js 绝对路径）与 `com.dsh.manager.json`（注入扩展 ID 与 Firefox gecko id，M4）。
+5. 写注册表：Chrome + Edge + Firefox 三条（HKCU，失败时提示手动导入 `.reg` 文件，安装器同时导出 `com.dsh.manager.reg` 备用）。
 6. 打印验收指引：「打开扩展 popup，应显示 stopped 而非 HOST_NOT_INSTALLED」。
 7. （可选）安装生命周期插件：见 `plugin/dsh-lifecycle/README.md`（本地包安装或 cordis.patch.yml 挂载）；未安装时宿主自动降级 taskkill，功能不受影响。
 
