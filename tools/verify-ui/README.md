@@ -4,7 +4,7 @@
 
 | 脚本 | 原理 | 适用环境 | 现状 |
 |------|------|----------|------|
-| `verify-cdp.js` | 零依赖 CDP 直连（headless Chrome + `Extensions.loadUnpacked` + Page.captureScreenshot），与 `tools/icons/_gen-icons.js` 同手法 | **沙箱内可用（已实测）** | 21 断言通过（扩展加载、popup/日志页截图 + 文本断言、页面内面板注入/展开、徽标三步实测（附加扩展 SW：port 0→绿点/无监听→清空/恢复默认）、console 异常检查） |
+| `verify-cdp.js` | 零依赖 CDP 直连（headless Chrome + `Extensions.loadUnpacked` + Page.captureScreenshot），与 `tools/icons/_gen-icons.js` 同手法 | **沙箱内可用（已实测）** | 26 断言通过（扩展加载、popup/日志页截图 + 文本断言、页面内面板注入/展开、日志页「加载更早/复制全部」交互、popup 设置校验交互、徽标三步实测（附加扩展 SW：port 0→绿点/无监听→清空/恢复默认）、console 异常检查） |
 | `verify-ui.js` | Google 官方 chrome-devtools-mcp（stdio 传输 MCP 客户端，手写零依赖） | 沙箱外（子进程管道在受限沙箱内被拦，spawn EINVAL） | 覆盖扩展加载/弹 popup/快照/截图；后续可扩交互断言 |
 
 ## verify-cdp.js（推荐先用）

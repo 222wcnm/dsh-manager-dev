@@ -303,6 +303,98 @@ async function main() {
     }
   }
 
+  // 9) 日志页交互（安全只读）：点「加载更早」（真实日志 < 500 行 → toast 已到开头）
+  //    与「复制全部」（toast 显示行数）——验证按钮/toast 链路，不触碰生命周期。
+  log('日志页交互（加载更早 / 复制全部）');
+  await page.send('Page.navigate', { url: 'chrome-extension://' + extId + '/logs.html' });
+  await sleep(3000);
+  const clickInPage = async (expr) => {
+    const r = await page.send('Runtime.evaluate', { expression: expr, returnByValue: true });
+    return r && r.result ? String(r.result.value ?? '') : '';
+  };
+  // 等待初始加载完成（按钮可用且底栏出现）再点击——2s 跟随刷新会短暂 busy，
+  // 直接点击可能落在禁用窗口被静默丢弃
+  let clickState = 'timeout';
+  for (let i = 0; i < 20; i++) {
+    await sleep(250);
+    clickState = await clickInPage(`(() => {
+      const b = document.getElementById('btn-load-earlier');
+      const f = document.getElementById('footer');
+      return JSON.stringify({ disabled: b ? b.disabled : null, footerReady: f ? f.textContent.includes('已加载') : false });
+    })()`);
+    if (clickState.includes('"disabled":false') && clickState.includes('"footerReady":true')) break;
+  }
+  const readyForClick = clickState.includes('"disabled":false') && clickState.includes('"footerReady":true');
+  if (readyForClick) {
+    await clickInPage(`(() => { document.getElementById('btn-load-earlier').click(); return 'clicked'; })()`);
+  }
+  let earlierToast = '';
+  for (let i = 0; i < 8; i++) {
+    await sleep(500);
+    earlierToast = await clickInPage(`(() => { const t = document.getElementById('toast-text'); return t ? t.textContent : ''; })()`);
+    if (earlierToast) break;
+  }
+  record('日志页：加载更早反馈', readyForClick && /已到日志开头|已暂停自动刷新/.test(earlierToast),
+    earlierToast + (earlierToast ? '' : '（点击前状态: ' + clickState + '）'));
+  await clickInPage(`(() => { const b = document.getElementById('btn-copy'); if (b) b.click(); return 'clicked'; })()`);
+  await sleep(1500);
+  const copyInfo = await clickInPage(`(() => {
+    const t = document.getElementById('toast-text');
+    return t ? t.textContent : '';
+  })()`);
+  record('日志页：复制全部反馈', /已复制|没有可复制|复制失败/.test(copyInfo), copyInfo);
+
+  // 10) popup 设置面板交互（安全）：展开设置 → 断言字段；无效端口 → 红框错误文案；
+  //     改回合法值保存 → toast；取消关闭。
+  log('popup 设置面板交互');
+  await page.send('Page.navigate', { url: 'chrome-extension://' + extId + '/popup.html' });
+  await sleep(3000);
+  await clickInPage(`(() => { const b = document.getElementById('btn-settings'); if (b) b.click(); return 'clicked'; })()`);
+  await sleep(800);
+  const settingsOpen = await clickInPage(`(() => {
+    const p = document.getElementById('settings-panel');
+    const port = document.getElementById('set-port');
+    return JSON.stringify({ open: !!(p && !p.classList.contains('hidden')), portValue: port ? port.value : '' });
+  })()`);
+  try {
+    const so = JSON.parse(settingsOpen);
+    record('popup：设置面板展开', so.open === true, settingsOpen);
+  } catch (_) {
+    record('popup：设置面板展开', false, settingsOpen);
+  }
+  await clickInPage(`(() => {
+    const input = document.getElementById('set-port');
+    input.value = '70000';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('btn-save').click();
+    return 'saved';
+  })()`);
+  await sleep(800);
+  const invalidInfo = await clickInPage(`(() => {
+    const e = document.getElementById('settings-error');
+    const input = document.getElementById('set-port');
+    return JSON.stringify({ err: e ? e.textContent : '', invalid: input ? input.classList.contains('field-invalid') : false });
+  })()`);
+  try {
+    const ii = JSON.parse(invalidInfo);
+    record('popup：无效端口校验（红框 + 文案）', ii.invalid === true && /0-65535/.test(ii.err), ii.err);
+  } catch (_) {
+    record('popup：无效端口校验（红框 + 文案）', false, invalidInfo);
+  }
+  await clickInPage(`(() => {
+    const input = document.getElementById('set-port');
+    input.value = '3080';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('btn-save').click();
+    return 'saved';
+  })()`);
+  await sleep(1000);
+  const saveInfo = await clickInPage(`(() => {
+    const t = document.getElementById('toast-text');
+    return t ? t.textContent : '';
+  })()`);
+  record('popup：合法设置保存 toast', saveInfo.includes('设置已保存'), saveInfo);
+
   await cleanup();
   const failed = results.filter((r) => !r.ok);
   log('=== 汇总 ===  PASS ' + (results.length - failed.length) + ' / FAIL ' + failed.length);

@@ -263,9 +263,10 @@ Get-Content "$env:USERPROFILE\.dsh\profiles\web\package.json"
 ## 13. M3：日志查看页（logs.html）
 
 > **可自动验收**：`node tools/verify-ui/verify-cdp.js` 已在沙箱内实测覆盖本步骤的
-> 1/2/7 项（页面加载、状态圆点、日志底栏、截图 + 文本断言 + console 异常检查），
-> 人工只需补 3-6/8 的交互项（自动刷新跟随、加载更早、复制、宿主缺失横幅）。
-> 完整交互流可用 `tools/verify-ui/verify-ui.js`（chrome-devtools-mcp，沙箱外）扩展。
+> 1/2/5/6/7 项（页面加载、状态圆点、日志底栏、「加载更早」反馈、「复制全部」toast、
+> 错误横幅/底栏 + 截图 + 文本断言 + console 异常检查），人工只需补 3/4/8 的
+> 动态行为项（自动刷新跟随、贴底保持、宿主缺失横幅）。完整交互流可用
+> `tools/verify-ui/verify-ui.js`（chrome-devtools-mcp，沙箱外）扩展。
 
 1. 启动 dsh（popup）→ 点 popup 底部「查看日志」→ 新标签页打开扩展日志页。
 2. 页面显示 dsh 启动日志尾部，底部状态行显示文件路径/大小/已加载行数；圆点为绿色（running）。
