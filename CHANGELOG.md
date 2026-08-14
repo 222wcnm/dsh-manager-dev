@@ -62,6 +62,9 @@
   uninstall 清理），`verify-linux.ps1 -E2E` 可一键触发。
 
 ### Fixed
+- smoke 静态核对自足化：`EXTENSION_ID.txt` / `extension-key.json` /
+  `.extension-id.json` 为本地产物且不入库，缺失时记 SKIP 而非失败——**全新克隆
+  （发布副本）可跑全量冒烟**（预期 333 PASS + 4 SKIP；本机开发目录 339 PASS + 1 SKIP）。
 - 徽标动态端口分支死代码：`Number(s.port) || DEFAULT_SETTINGS.port` 会把合法设置值
   0 吞掉（port 0 时徽标错误地探测 3080）——改为 `Number.isFinite` 校验后原样使用；
   verify-cdp 新增徽标三步实测（附加扩展 SW：port 0 → 绿点、无监听端口 → 清空、

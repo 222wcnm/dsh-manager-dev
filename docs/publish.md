@@ -35,8 +35,10 @@ GitHub 上操作的事项与步骤；当前状态：**本地已备好发布副�
 4. 发布前自查（每次发布前重跑）：
    - 发布副本内 `git status` 干净、`git log --oneline` 仅 1 条；
    - `git ls-files` 中无 `extension-key.json` / `.extension-id.json` / `com.dsh.manager.reg`；
-   - 冒烟 `node native-host/test/smoke.js`（Windows 339 PASS + 1 SKIP）与
-     UI 验收 `node tools/verify-ui/verify-cdp.js`（28 断言）通过；
+   - 冒烟 `node native-host/test/smoke.js` 通过——**全新克隆预期 333 PASS + 4 SKIP**
+     （3 项本地产物核对 SKIP + 1 项 POSIX 场景 SKIP，smoke 已自足化；本机开发目录
+     因本地产物存在为 339 PASS + 1 SKIP）；
+   - UI 验收 `node tools/verify-ui/verify-cdp.js`（28 断言）通过；
    - 原开发仓库（`dsh-manager/`，含完整历史）本地保留备份，不回滚不删除。
 
 ## 范围决定（2026-08-14）
