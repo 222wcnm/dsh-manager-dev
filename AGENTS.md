@@ -22,9 +22,9 @@
 
 ```powershell
 node --check native-host/host.js                     # 宿主语法检查
-node native-host/test/smoke.js                       # 冒烟测试 26 场景（Windows 339 PASS+1 SKIP / Linux 346 PASS；BASE_ENV 进程枚举围栏仅 Windows 生效——场景 26 在 POSIX 不注入任何钩子走真实 /proc 平台层）
+node native-host/test/smoke.js                       # 冒烟测试 26 场景（本机：Windows 339 PASS+1 SKIP / Linux 346 PASS；全新克隆：Windows 333 PASS+4 SKIP——3 项本地产物核对跳过；BASE_ENV 进程枚举围栏仅 Windows 生效——场景 26 在 POSIX 不注入任何钩子走真实 /proc 平台层）
 node native-host/test/smoke-real.js                  # 真实 dsh 集成（需 DSH_MANAGER_NPM_PREFIX=%APPDATA%\npm）
-node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（18 项）
+node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（21 项）
 powershell -ExecutionPolicy Bypass -File native-host\install.ps1 -DryRun   # 安装预演（Windows）
 sh native-host/install.sh --dry-run                                          # 安装预演（Linux/macOS）
 powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E  # WSL Linux 冒烟 + 真实安装 E2E

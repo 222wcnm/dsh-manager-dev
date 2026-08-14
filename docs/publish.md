@@ -12,6 +12,15 @@ GitHub 上操作的事项与步骤；当前状态：**本地已备好发布副�
 
 日常开发只推私有开发仓库；公开发布时才按下方步骤推送发布副本。
 
+## 发布物剔除清单（build-publish.ps1 自动执行）
+
+以下内部过程文档**不进入**发布副本（仅存在于私有开发仓库）：
+
+- `docs/open-source-review.md` —— 开源前内部审查记录（含 subagent 分工、待拍板决策）
+- `docs/upstream-feedback.md` —— M5 GitHub Discussions 帖子草稿（含待填占位）
+- `docs/publish.md` —— 本文件：发布操作清单，开发仓库自用
+- `CHROMEWEBSTORE.md` —— 商店上架素材（暂缓上架，保留待用）
+
 ## 仓库话题（Topics）
 
 发布后在仓库设置（Settings → Topics，或建仓向导）填写：

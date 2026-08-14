@@ -58,6 +58,16 @@ try {
     Write-Host '2/4 替换为发布版 CHANGELOG...'
     Copy-Item (Join-Path $PSScriptRoot 'release-changelog.md') (Join-Path $tempDir 'CHANGELOG.md') -Force
 
+    # 内部过程文档不出现在公开仓库（约定见开发仓库 docs/publish.md）
+    foreach ($f in @(
+        'docs/open-source-review.md',
+        'docs/upstream-feedback.md',
+        'docs/publish.md',
+        'CHROMEWEBSTORE.md'
+    )) {
+        Remove-Item (Join-Path $tempDir $f) -Force -ErrorAction SilentlyContinue
+    }
+
     Write-Host '3/4 内容级镜像到发布目录（robocopy /MIR）...'
     robocopy $tempDir $PublishDir /MIR /NFL /NDL /NJH | Out-Null
     if ($LASTEXITCODE -ge 8) {
@@ -74,7 +84,7 @@ try {
         $fileCount = (git ls-files).Count
         $commitCount = (git log --oneline | Measure-Object -Line).Lines
         Write-Host ('完成：' + $fileCount + ' 个文件 / ' + $commitCount + ' 条提交')
-        Write-Host '推送前自查见 docs/publish.md（冒烟/verify-cdp/敏感文件检查）。'
+        Write-Host '推送前自查清单见开发仓库 docs/publish.md（冒烟/verify-cdp/敏感文件检查）。'
     }
     finally {
         Pop-Location

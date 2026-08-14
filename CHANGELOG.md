@@ -62,6 +62,13 @@
   uninstall 清理），`verify-linux.ps1 -E2E` 可一键触发。
 
 ### Fixed
+- **盲审整改**（第三方冷眼审计发布副本，结论「有条件发布」，无硬阻断）：design.md
+  头部版本/日期/状态修正（0.1.0 / 2026-08-14 / 已实现）；AGENTS.md 插件单测
+  18→21 项、冒烟口径标注本机与全新克隆两种语境；README 测试环境补全新克隆口径；
+  popup.html 设置齿轮 SVG 移除无效 `clip-path` 引用（引用的 clipPath id 在独立
+  SVG 内不可见，跨引擎可能静默失效）；发布副本剔除 4 份内部过程文档（
+  open-source-review / upstream-feedback / publish / CHROMEWEBSTORE，清单见
+  docs/publish.md）。
 - smoke 静态核对自足化：`EXTENSION_ID.txt` / `extension-key.json` /
   `.extension-id.json` 为本地产物且不入库，缺失时记 SKIP 而非失败——**全新克隆
   （发布副本）可跑全量冒烟**（预期 333 PASS + 4 SKIP；本机开发目录 339 PASS + 1 SKIP）。
