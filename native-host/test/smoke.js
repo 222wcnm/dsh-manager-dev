@@ -937,6 +937,36 @@ async function scenarioPortZero() {
   const st2 = runHost({ id: 's25g', action: 'status', payload: {} }, 's25g');
   expect(st2 && st2.ok === true && st2.result.state === 'stopped',
     '25 残留动态端口记录（死 pid）-> status 清理为 stopped', JSON.stringify(st2 && st2.result));
+
+  // 25h 占位期展示：手工构造 port 0 记录指向「不打印 URL 的存活 fake-dsh」→
+  //     status = starting + port:null + requestedPort:0（发现失败不误判、不清理活记录）
+  const silent = spawn(process.execPath, [FAKE_DSH, '--port', '0'], {
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore',
+    env: Object.assign({}, process.env, { DSH_FAKE_NO_URL: '1' }),
+  });
+  await sleep(600); // 等其绑定临时端口（无输出，无法探测具体值）
+  fs.mkdirSync(path.join(BASE, 'run'), { recursive: true });
+  // logStartBytes 必须取当前日志大小（宿主真实记录语义）：只解析 spawn 之后的追加内容，
+  // 否则本场景前几步的历史 URL 行会被误当成本实例的端口
+  const logPathNow = path.join(BASE, 'logs', 'dsh-web.log');
+  let logStartNow = 0;
+  try { logStartNow = fs.statSync(logPathNow).size; } catch (_) { logStartNow = 0; }
+  fs.writeFileSync(path.join(BASE, 'run', 'dsh-web.json'), JSON.stringify({
+    pid: silent.pid, port: 0, requestedPort: 0, logStartBytes: logStartNow,
+    host: '127.0.0.1', profile: 'web', startedAt: Date.now(),
+    version: '0.0.0-fake', binPath: FAKE_DSH, extraArgs: [],
+    cmdline: 'node ' + FAKE_DSH + ' --port 0',
+  }, null, 2), 'utf8');
+  const stH = runHost({ id: 's25h', action: 'status', payload: {} }, 's25h');
+  expect(stH && stH.ok === true && stH.result.state === 'starting'
+    && stH.result.port === null && stH.result.requestedPort === 0,
+    '25 占位期 status：starting + port:null + requestedPort:0（发现失败不误判）',
+    JSON.stringify(stH && stH.result));
+  spawnSync('taskkill', ['/PID', String(silent.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  await waitPidGone(silent.pid, 5000);
+
   cleanup();
 }
 

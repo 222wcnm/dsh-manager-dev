@@ -260,6 +260,46 @@ async function main() {
   fs.writeFileSync(panelOpenPng, Buffer.from(shot4.data, 'base64'));
   record('panel-open 截图', fs.statSync(panelOpenPng).size > 2000, panelOpenPng + ' (' + fs.statSync(panelOpenPng).size + ' bytes)');
 
+  // 7b) 停止两步确认（安全：只验证确认态出现与 3s 超时还原，绝不二次点击执行）
+  await page.send('Runtime.evaluate', {
+    expression: `(() => {
+      const h = document.getElementById('dsh-manager-panel-host');
+      h.shadowRoot.querySelectorAll('.btn')[0].click();
+      return 'clicked';
+    })()`,
+    returnByValue: true,
+  });
+  await sleep(400);
+  const confirmText = await page.send('Runtime.evaluate', {
+    expression: `(() => {
+      const h = document.getElementById('dsh-manager-panel-host');
+      const b = h.shadowRoot.querySelectorAll('.btn')[0];
+      return JSON.stringify({ text: b.textContent.trim(), confirm: b.classList.contains('confirm') });
+    })()`,
+    returnByValue: true,
+  });
+  try {
+    const ct = JSON.parse(String(confirmText.result.value));
+    record('面板：停止首击进入确认态', ct.confirm === true && ct.text === '确认停止', JSON.stringify(ct));
+  } catch (_) {
+    record('面板：停止首击进入确认态', false, '解析失败');
+  }
+  await sleep(3200); // 超过 3s 确认窗口，未二次点击必须还原
+  const revertText = await page.send('Runtime.evaluate', {
+    expression: `(() => {
+      const h = document.getElementById('dsh-manager-panel-host');
+      const b = h.shadowRoot.querySelectorAll('.btn')[0];
+      return JSON.stringify({ text: b.textContent.trim(), confirm: b.classList.contains('confirm') });
+    })()`,
+    returnByValue: true,
+  });
+  try {
+    const rt = JSON.parse(String(revertText.result.value));
+    record('面板：确认态 3s 超时还原', rt.confirm === false && rt.text === '停止', JSON.stringify(rt));
+  } catch (_) {
+    record('面板：确认态 3s 超时还原', false, '解析失败');
+  }
+
   // 8) 徽标（M4 动态端口路径）：附加扩展 service worker 实测——
   //    port 0 → refreshBadge 走 native status 分支（本机真实 dsh 在跑 → 绿点）；
   //    无监听端口 → 清空；恢复默认设置。回归守护 background.js 的 `|| 3080` 吞 0 缺陷。

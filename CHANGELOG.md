@@ -32,6 +32,10 @@
   verify-cdp 新增徽标三步实测（附加扩展 SW：port 0 → 绿点、无监听端口 → 清空、
   恢复默认），并修正 SW 目标选择（Chrome 组件扩展的 service_worker 会干扰 find 首个）。
 - popup starting 状态在动态端口下显示「端口自动分配中」。
+- verify-cdp 增至 28 断言：面板「停止两步确认」安全实测（首击确认态 + 3s 超时还原，
+  不执行真实停止）；smoke 新增 25h 占位期展示断言（不打印 URL 的存活进程 →
+  `starting` + `port:null` + `requestedPort:0`，发现失败不误判）；fake-dsh 新增
+  `DSH_FAKE_NO_URL=1` 变体；README 新增动态端口 FAQ。
 
 ## [未发布] - M3 体验增强
 

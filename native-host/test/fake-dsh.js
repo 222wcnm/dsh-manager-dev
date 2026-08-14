@@ -41,6 +41,8 @@ const exitImmediately =
   process.env.DSH_FAKE_EXIT_IMMEDIATELY === '1';
 // M2：模拟「无 dsh-lifecycle 插件」场景——lifecycle 路由一律不注册
 const noLifecycle = process.env.DSH_FAKE_NO_LIFECYCLE === '1';
+// M4：模拟「dsh 不打印 URL 行」场景（动态端口发现失败的活进程，供占位期 status 测试）
+const noUrl = process.env.DSH_FAKE_NO_URL === '1';
 
 // 宿主版本检查：node fake-dsh.js --version
 if (process.argv.includes('--version')) {
@@ -58,8 +60,11 @@ if (port === 0 && !exitImmediately) {
   });
   server.listen(0, '127.0.0.1', () => {
     const actual = server.address().port;
-    console.log('dsh web: http://127.0.0.1:' + actual);
-    console.log('fake-dsh listening on 127.0.0.1:' + actual);
+    if (!noUrl) {
+      console.log('dsh web: http://127.0.0.1:' + actual);
+      console.log('fake-dsh listening on 127.0.0.1:' + actual);
+    }
+    // noUrl：进程保持存活但不打印 URL（宿主动态端口发现将失败 → 占位期 starting）
   });
   return;
 }
