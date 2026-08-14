@@ -855,18 +855,28 @@ dsh-manager/
 
 ### 14.1 宿主冒烟（不依赖浏览器）
 
-`test/smoke.ps1`：构造带长度前缀的 JSON 帧，管道输入 `node host.js`，断言应答 JSON 与状态文件副作用：
+`test/smoke.js`（25 场景 339 断言，2026-08-14 计数）：以 `--req/--res` 文件模式逐请求
+拉起 `node host.js`（沙箱管道受限环境兼容），伪 dsh 由 `DSH_BIN_STUB` 指向
+`test/fake-dsh.js`（含 lifecycle 端点、`--port 0`、退出立即/不打印 URL 变体），
+状态目录隔离在工作区 `.smoke`，`BASE_ENV` 默认围栏真实进程枚举。覆盖：ping/status
+/start/stop/restart/adopt 主链路与幂等、端口占用、参数校验、锁竞争、残留清理、
+START_TIMEOUT、优雅停与 force 降级、外部实例发现/接管、M2 富状态、M3 logs 分页
+（行边界对齐 + 定宽行逐字节重建）、M4 `--port 0`（回填/重放/校验/超时/占位期展示）、
+gecko id 与宿主模板静态断言。
 
-```
-"echo-frame" → ping 应答
-start（伪 dsh：以环境变量 DSH_BIN_STUB 指向一个假 bin.js，仅监听端口打印 URL）→ starting/running
-status → running + 正确 pid/port
-stop → stopped + run 记录清除
-```
+`test/smoke-real.js`（真实 dsh 集成，best-effort）：真实 bin.js + 隔离 DSH_HOME，
+start/status/stop 全链路、`--port 0` 真机回填、外部发现生产路径（真实
+powershell/netstat，只读，不接管不停止）与 `EXTERNAL_UNMANAGED` 保护。
+
+扩展 UI：`tools/verify-ui/verify-cdp.js`（28 断言，零依赖 CDP，沙箱内可用）——
+扩展加载、popup/logs 截图与文本断言、页面内面板注入/展开/停止两步确认态、日志页
+「加载更早/复制全部」交互、popup 设置校验交互、徽标三步实测、console 异常检查。
+
+插件：`plugin/dsh-lifecycle/test/*.test.js` 单测（21 项）。
 
 ### 14.2 集成/E2E（真实 dsh）
 
-1. 安装器一键安装 → 注册表两项存在、宿主 manifest 的 allowed_origins 与扩展 ID 一致。
+1. 安装器一键安装 → 注册表三项（Chrome/Edge/Firefox）存在、宿主 manifest 的 allowed_origins/allowed_extensions 与扩展 ID、gecko id 一致。
 2. 加载 unpacked 扩展 → popup 显示 stopped（非 HOST_NOT_INSTALLED）。
 3. Start → 徽标变绿 → 自动打开 `http://127.0.0.1:3080` → 页面可交互。
 4. **宿主死亡实验**：启动后 taskkill 掉宿主进程 → dsh 仍在运行 → popup status 仍为 running。
@@ -875,7 +885,7 @@ stop → stopped + run 记录清除
 7. Restart → 旧会话在 Web UI 中仍可继续（会话持久化 F8 验证）。
 8. 异常矩阵：端口占用 / 假 DSH_HOME / 无 Node / 快速连点 / 开机后首次使用。
 9. （M2）安装 dsh-lifecycle 后：stop 走优雅路径（无 taskkill 调用、会话无损）；health 返回 200 且字段正确；卸载插件后回归 M1 路径无退化。
-10. （M3）打开任意 dsh Web UI 页面 → 右下角出现页面内管理面板（§8.6）：状态徽章随 status 轮询更新；展开后「停止」两步确认、「重启」走宿主语义；非 dsh 的本地页面不注入。verify-cdp.js 已自动覆盖「注入 + 渲染 + 状态文本」部分。
+10. （M3）打开任意 dsh Web UI 页面 → 右下角出现页面内管理面板（§8.6）：状态徽章随 status 轮询更新；展开后「停止」两步确认、「重启」走宿主语义；非 dsh 的本地页面不注入。verify-cdp.js 已自动覆盖「注入 + 渲染 + 状态文本 + 展开 + 两步确认态（首击确认/3s 还原）」。
 
 ### 14.3 验收标准（MVP）
 
