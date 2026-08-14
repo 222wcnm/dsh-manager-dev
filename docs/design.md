@@ -333,7 +333,7 @@ Popup 对 `starting` / `stopping` 的处理：收到 ack 后进入轮询（每 1
 1. status → `stopped` 则返回 `ALREADY_STOPPED`；status → `external` 则返回 `EXTERNAL_UNMANAGED`（外部实例不属于本扩展管理范围，绝不 taskkill）。
 2. 抢锁。
 3. 优雅路径（dsh-lifecycle 插件存在时）：先探测 `/_lifecycle/health`（1.5s）判定插件可用；可用则 `POST http://127.0.0.1:<port>/_lifecycle/shutdown`（2s 连接超时）→ 轮询端口关闭 ≤ 3s；关闭则记为 `stopMethod:'graceful'` 并跳过第 4 步。插件不可达则直接走第 4 步（不浪费一次 POST；SPA fallback 对未匹配路径也返回 200，不能以状态码判定插件存在）。
-4. 强制路径（插件缺失或优雅路径超时）：`taskkill /PID <pid> /T /F`（PID 取自 run 记录；先做 PID 复用校验，失败则拒杀并报 `STOP_FAILED`），记为 `stopMethod:'force'`。
+4. 强制路径（插件缺失或优雅路径超时）：Windows 为 `taskkill /PID <pid> /T /F`；**M4 POSIX 为 SIGTERM（进程组，detached 起组）→ 3s 内未退出 SIGKILL 兜底**；均记为 `stopMethod:'force'`（语义不变：优雅仅指 lifecycle 插件路径）。PID 取自 run 记录；先做 PID 复用校验，失败则拒杀并报 `STOP_FAILED`。
 5. 轮询端口关闭 ≤ 10s；仍未关闭 → `STOP_FAILED`。
 6. 删除 run 记录与 pid 文件，释放锁。stop 响应的 result 附带 `stopMethod`（graceful/force）。
 
@@ -439,6 +439,24 @@ run 记录示例：
 3. **记录来源**：run 记录的 profile/host/extraArgs 从该进程的**真实命令行**解析（本机进程表，用户自己的进程），`binPath` 由宿主标准解析链（§6.4）现场解析；`--port 0` 归一化为接管时的实际端口。
 4. **重启重放**：接管实例的 restart 用其原始 argv（去掉 profile/host/port 后以记录值归一化重放），保留用户其余参数（如 `--patch`、`--resume`、`--trusted-host`）；**该路径不走 §12.1 extraArgs 白名单**——因为参数来自本机进程表而非扩展消息。扩展输入路径（start/restart 的 payload）仍严格白名单，两条输入通道边界清晰。
 5. **已知局限**：接管后环境变量为宿主当前环境（外部进程的 env 不可读）；`startedAt` 记为接管时刻；多外部实例时逐个接管（接管一个后 managed 优先，其余外部实例需在停止该实例后再次 status 发现）。
+
+---
+
+## 6.8 平台抽象层（M4）
+
+宿主对平台差异的收敛点（其余逻辑平台无关）：
+
+| 能力 | Windows | Linux | macOS |
+|------|---------|-------|-------|
+| 状态根目录 | `%LOCALAPPDATA%\dsh-manager` | `$XDG_CONFIG_HOME/dsh-manager` 或 `~/.config/dsh-manager` | `~/Library/Application Support/dsh-manager` |
+| 强制终止 | `taskkill /PID <pid> /T /F` | `kill(-pid, SIGTERM)`（进程组）→ 3s → SIGKILL | 同 Linux（`kill(-pid, …)`） |
+| 进程枚举 | powershell `Get-CimInstance Win32_Process` | **/proc 扫描（零外部依赖）**：`/proc/*/cmdline` + `comm` 过滤 node | `ps -eo pid=,args=` |
+| 端口表 | `netstat -ano -p TCP` | **/proc/net/tcp(+tcp6)**（LISTEN 行 inode → `/proc/*/fd` 反查 pid，零外部依赖） | `lsof -nP -iTCP -sTCP:LISTEN` |
+| PID 命令行校验 | `tasklist /FI` | `/proc/<pid>/cmdline` | `ps -p <pid> -o args=` |
+
+实现要点：`IS_WIN`/`IS_MAC` 分支集中在上述五个函数内；`--port 0` 日志发现、锁、run 记录、HTTP 探测、优雅停链全部平台无关；测试钩子（`DSH_MANAGER_FAKE_PROCESSES` 等）优先于平台实现（假数据注入时两者都不走）。
+
+**验证状态**（2026-08-14）：Windows 路径 M1 起生产实测；**Linux 路径经 Kali WSL（WSL2）实测通过**——smoke 场景 26（POSIX 专属）不注入任何 fake 钩子，真实 /proc 枚举 + /proc/net/tcp 端口表 + /proc PID 校验 + 指纹探测发现/接管/停止外部实例全链路通过，且 Linux 全量冒烟不再围栏（`BASE_ENV` 围栏仅 Windows 使用）；macOS 三个分支已实现但**未实测**（无 macOS 设备，`ps`/`lsof`/`~/Library` 分支待验证）。
 
 ---
 
@@ -855,14 +873,15 @@ dsh-manager/
 
 ### 14.1 宿主冒烟（不依赖浏览器）
 
-`test/smoke.js`（25 场景 339 断言，2026-08-14 计数）：以 `--req/--res` 文件模式逐请求
+`test/smoke.js`（26 场景，2026-08-14 计数：Windows 339 PASS + 1 SKIP / Linux 346 PASS）：以 `--req/--res` 文件模式逐请求
 拉起 `node host.js`（沙箱管道受限环境兼容），伪 dsh 由 `DSH_BIN_STUB` 指向
 `test/fake-dsh.js`（含 lifecycle 端点、`--port 0`、退出立即/不打印 URL 变体），
-状态目录隔离在工作区 `.smoke`，`BASE_ENV` 默认围栏真实进程枚举。覆盖：ping/status
+状态目录隔离在工作区 `.smoke`，`BASE_ENV` 围栏真实进程枚举**仅 Windows 生效**（本机常驻真实 dsh web 会干扰「空目录→stopped」场景）。覆盖：ping/status
 /start/stop/restart/adopt 主链路与幂等、端口占用、参数校验、锁竞争、残留清理、
 START_TIMEOUT、优雅停与 force 降级、外部实例发现/接管、M2 富状态、M3 logs 分页
 （行边界对齐 + 定宽行逐字节重建）、M4 `--port 0`（回填/重放/校验/超时/占位期展示）、
-gecko id 与宿主模板静态断言。
+gecko id 与宿主模板静态断言；**场景 26（仅 POSIX）不注入任何 fake 钩子**：真实 /proc 枚举 +
+/proc/net/tcp 端口表 + /proc PID 校验 + 指纹探测发现/接管/停止外部实例全链路（Windows 记 SKIP，其平台路径由 smoke-real 与生产实测覆盖）。
 
 `test/smoke-real.js`（真实 dsh 集成，best-effort）：真实 bin.js + 隔离 DSH_HOME，
 start/status/stop 全链路、`--port 0` 真机回填、外部发现生产路径（真实
@@ -905,7 +924,7 @@ powershell/netstat，只读，不接管不停止）与 `EXTERNAL_UNMANAGED` 保�
 | **M1.2 外部实例接管**（§6.7） | adopt 动作：pid+port 双重匹配回写 run 记录，接管后 stop/restart 可用、重启按原 argv 重放；popup「接管」按钮；popup UI 对齐 dsh Web UI 设计令牌 | smoke 场景 19 通过 |
 | **M2 生命周期插件** | `dsh-lifecycle`（shutdown + health）；宿主 stop/restart 优雅链；popup 富状态与插件安装提示 | stop 走优雅路径、全程无 taskkill、会话无损；health 200 且字段正确（§14.2.9） |
 | **M3 体验增强** | restart 按钮、日志查看与复制、启动后自动开 UI 开关、徽标周期刷新（alarms）；Web UI 页面内管理面板（页面内停止/重启） | 完成（2026-08-14：`logs` 动作与日志查看页 §6.3/§8.4 + 页面内管理面板 §8.6（content script 方案，替代 dsh client 插件：外部插件无独立构建路径，见 §8.6 决策）；smoke 场景 24 + verify-cdp 自动验收） |
-| **M4 跨平台/跨浏览器** | macOS/Linux（SIGTERM 优雅路径、`~/.config` 状态目录、`kill` 代替 taskkill）；Firefox（`allowed_extensions` 已预留）；`--port 0` 端口发现 | 进行中：`--port 0` 已支持并对真实 dsh 实测通过（2026-08-14，§6.3 start 第 9 步 + smoke 场景 25 + smoke-real 扩展段）；Firefox Windows 宿主注册与 gecko id 已就绪（install/uninstall 含 Mozilla 注册表项，扩展运行时未实测）；macOS/Linux 待做 |
+| **M4 跨平台/跨浏览器** | macOS/Linux（SIGTERM 优雅路径、`~/.config` 状态目录、`kill` 代替 taskkill）；Firefox（`allowed_extensions` 已预留）；`--port 0` 端口发现 | 进行中：`--port 0` 已支持并对真实 dsh 实测通过（2026-08-14，§6.3 start 第 9 步 + smoke 场景 25 + smoke-real 扩展段）；Firefox Windows 宿主注册与 gecko id 已就绪（install/uninstall 含 Mozilla 注册表项，扩展运行时未实测）；**Linux 已实测通过（Kali WSL2，smoke 场景 26 真实 /proc 路径）**；macOS 待实测 |
 | **M5（可选）上游贡献** | 向 deepseek-harness 提 `dsh server start/stop/status` 子命令或官方 lifecycle 插件 PR，本项目宿主改为优先调用官方面 | 上游采纳或明确拒绝 |
 
 ---

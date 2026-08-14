@@ -79,12 +79,24 @@ const LOGS_MAX_MAX_BYTES = 1024 * 1024; // 1MB
 const NEEDS_LOG_TAIL = new Set(['START_TIMEOUT', 'STOP_FAILED', 'INTERNAL']);
 
 // ---------------------------------------------------------------------------
-// 路径（状态根目录，见 design §6.5）
+// 路径（状态根目录，见 design §6.8 平台抽象层）
 // ---------------------------------------------------------------------------
+const IS_WIN = process.platform === 'win32';
+const IS_MAC = process.platform === 'darwin';
+const IS_LINUX = process.platform === 'linux';
+
 function defaultBaseDir() {
-  // 默认 %LOCALAPPDATA%\dsh-manager；LOCALAPPDATA 缺失时退回用户主目录
-  const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-  return path.join(local, 'dsh-manager');
+  // Windows：%LOCALAPPDATA%\dsh-manager；LOCALAPPDATA 缺失时退回用户主目录
+  if (IS_WIN) {
+    const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    return path.join(local, 'dsh-manager');
+  }
+  // macOS：~/Library/Application Support/dsh-manager
+  if (IS_MAC) {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'dsh-manager');
+  }
+  // Linux：$XDG_CONFIG_HOME/dsh-manager 或 ~/.config/dsh-manager
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'dsh-manager');
 }
 
 const BASE_DIR = (testMode() && process.env.DSH_MANAGER_BASE_DIR) || defaultBaseDir();
@@ -265,11 +277,35 @@ function pidAlive(pid) {
 }
 
 // 可选 PID 命令行校验（design §6.3 / §12.1 PID 复用防护）：
-//   tasklist /FI "PID eq <pid>"，输出须包含 'dsh' 或 bin 路径关键字。
+//   Windows：tasklist /FI "PID eq <pid>"，输出须包含 'dsh' 或 bin 路径关键字；
+//   Linux：/proc/<pid>/cmdline；macOS：ps -p <pid> -o args=。
 //   本环境可能 EPERM，必须 try/catch：任何异常一律静默跳过（视为通过）；
 //   DSH_MANAGER_PID_CHECK=0 时直接跳过。
 function pidLooksLikeDsh(pid, binPath) {
   if (testMode() && process.env.DSH_MANAGER_PID_CHECK === '0') return true;
+  if (!IS_WIN) {
+    // POSIX：读命令行；读取失败按通过处理（权限等）
+    let cmd = '';
+    try {
+      if (IS_LINUX) {
+        cmd = fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8').split('\0').join(' ');
+      } else {
+        const r = spawnSync('ps', ['-p', String(pid), '-o', 'args='], {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 5000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        if (!r.error && r.status === 0) cmd = (r.stdout || '').trim();
+      }
+    } catch (err) {
+      return true; // 无法校验，按通过
+    }
+    if (!cmd) return true; // 无输出（权限受限等）——按通过处理
+    if (/dsh/.test(cmd)) return true;
+    if (binPath && cmd.includes(String(binPath))) return true;
+    return false;
+  }
   let out;
   try {
     const r = spawnSync('tasklist', ['/FI', 'PID eq ' + pid, '/FO', 'CSV', '/NH'], {
@@ -534,6 +570,63 @@ function listNodeProcesses() {
   if (fake !== null) {
     return fake.filter((p) => p && Number.isInteger(p.pid) && typeof p.cmdline === 'string');
   }
+  if (IS_WIN) {
+    return listNodeProcessesWin();
+  }
+  if (IS_LINUX) {
+    return listNodeProcessesLinux();
+  }
+  // macOS：ps -eo pid=,args= 过滤 argv0 为 node 的进程（未实测，见 design §6.8）
+  const r = spawnCapture('ps', ['-eo', 'pid=,args=']);
+  if (!r.ok) {
+    log('进程枚举不可用，跳过外部实例发现: ' + r.error);
+    return [];
+  }
+  const out = [];
+  for (const line of String(r.out).split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(.+)$/.exec(line);
+    if (!m) continue;
+    const cmdline = m[2].trim();
+    const argv0 = (cmdline.split(/\s+/)[0] || '');
+    if (/(?:^|[\\/ ])node(?:\.exe)?$/.test(argv0)) out.push({ pid: Number(m[1]), cmdline });
+  }
+  return out;
+}
+
+// Linux：扫描 /proc/*/cmdline + comm（零外部依赖，design §6.8）
+function listNodeProcessesLinux() {
+  const out = [];
+  let entries;
+  try {
+    entries = fs.readdirSync('/proc');
+  } catch (err) {
+    log('进程枚举不可用，跳过外部实例发现: ' + (err && err.message));
+    return [];
+  }
+  for (const e of entries) {
+    const pid = Number(e);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    let cmdline = '';
+    try {
+      cmdline = fs.readFileSync('/proc/' + e + '/cmdline', 'utf8').split('\0').join(' ').trim();
+    } catch (err) {
+      continue; // 进程退出/权限
+    }
+    if (!cmdline) continue;
+    let comm = '';
+    try {
+      comm = fs.readFileSync('/proc/' + e + '/comm', 'utf8').trim();
+    } catch (err) { /* 忽略 */ }
+    const argv0 = (cmdline.split(/\s+/)[0] || '');
+    const isNode = /^node(js)?(\.exe)?$/i.test(comm)
+      || /(?:^|[\\/ ])node(?:js)?(?:\.exe)?$/.test(argv0);
+    if (isNode) out.push({ pid, cmdline });
+  }
+  return out;
+}
+
+// Windows：powershell Get-CimInstance 枚举 node.exe（design §6.6）
+function listNodeProcessesWin() {
   const cmd = "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress";
   const r = spawnCapture('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd]);
   if (!r.ok) {
@@ -575,6 +668,78 @@ function listTcpListeners() {
   if (fake !== null) {
     return fake.filter((l) => l && Number.isInteger(l.pid) && Number.isInteger(l.port) && typeof l.addr === 'string');
   }
+  if (IS_WIN) {
+    return listTcpListenersWin();
+  }
+  return listTcpListenersProcfs();
+}
+
+// Linux：/proc/net/tcp(+tcp6) 的 LISTEN 行只含 inode，经 /proc/*/fd 反查 pid
+//（零外部依赖，design §6.8）。IPv4 地址为 4 字节小端 hex，IPv6 为 4×32 位小端 hex。
+function listTcpListenersProcfs() {
+  const listen = new Map(); // inode -> { addr, port }
+  const ipv4FromHexLE = (hex) => [6, 4, 2, 0].map((i) => String(parseInt(hex.slice(i, i + 2), 16))).join('.');
+  const ipv6FromHexLE = (hex) => {
+    const groups = [];
+    for (let w = 0; w < 4; w++) {
+      const word = hex.slice(w * 8, w * 8 + 8);
+      groups.push(word.slice(6, 8) + word.slice(4, 6));
+      groups.push(word.slice(2, 4) + word.slice(0, 2));
+    }
+    // 压缩一次全 0 段（只用于回环/通配判断，无需完全规范的 IPv6 文本）
+    return groups.join(':').replace(/(?:^|:)0(?::0)+(?::|$)/, '::') || '::';
+  };
+  for (const f of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let raw;
+    try {
+      raw = fs.readFileSync(f, 'utf8');
+    } catch (err) {
+      continue;
+    }
+    for (const line of raw.split('\n')) {
+      // sl local_address rem_address st tx:rx tr:when retrnsmt uid timeout inode
+      const m = /^\s*\d+:\s+([0-9A-Fa-f]+):([0-9A-Fa-f]+)\s+[0-9A-Fa-f]+:[0-9A-Fa-f]+\s+0A\s+[^\s]+\s+[^\s]+\s+[^\s]+\s+(\d+)\s+\d+\s+(\d+)\s/.exec(line);
+      if (!m) continue;
+      const hex = m[1];
+      const addr = hex.length === 8 ? ipv4FromHexLE(hex) : ipv6FromHexLE(hex);
+      listen.set(m[3], { addr, port: parseInt(m[2], 16) });
+    }
+  }
+  const out = [];
+  let entries;
+  try {
+    entries = fs.readdirSync('/proc');
+  } catch (err) {
+    return out;
+  }
+  for (const e of entries) {
+    const pid = Number(e);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    let fds;
+    try {
+      fds = fs.readdirSync('/proc/' + e + '/fd');
+    } catch (err) {
+      continue;
+    }
+    for (const fd of fds) {
+      let link;
+      try {
+        link = fs.readlinkSync('/proc/' + e + '/fd/' + fd);
+      } catch (err) {
+        continue;
+      }
+      const sm = /^socket:\[(\d+)\]$/.exec(link);
+      if (sm && listen.has(sm[1])) {
+        const l = listen.get(sm[1]);
+        out.push({ addr: l.addr, port: l.port, pid });
+      }
+    }
+  }
+  return out;
+}
+
+// Windows：netstat -ano -p TCP 解析 LISTENING 行
+function listTcpListenersWin() {
   const r = spawnCapture('netstat', ['-ano', '-p', 'TCP']);
   if (!r.ok) {
     log('netstat 不可用，跳过端口表解析: ' + r.error);
@@ -822,6 +987,12 @@ function spawnDsh(bin, v) {
   return child;
 }
 
+// 强制终止（design §6.8 平台抽象层）：Windows taskkill /T /F；
+// POSIX 先 SIGTERM 进程组（detached 起组），3s 内未退出再 SIGKILL 兜底。
+function terminateProcess(pid) {
+  return IS_WIN ? taskkillProcess(pid) : killProcessPosix(pid);
+}
+
 // taskkill /PID <pid> /T /F；stdio:'ignore'，只等 exit 事件，不捕获输出（避免管道问题）
 function taskkillProcess(pid) {
   return new Promise((resolve) => {
@@ -843,6 +1014,37 @@ function taskkillProcess(pid) {
     };
     child.on('error', (err) => finish({ ok: false, error: err.message }));
     child.on('exit', (code) => finish({ ok: code === 0, code }));
+  });
+}
+
+// POSIX：kill(-pid, SIGTERM) 进程组 → 3s 轮询 → SIGKILL 兜底。
+// 返回 { ok, code }，与 taskkillProcess 同形。
+function killProcessPosix(pid) {
+  return new Promise((resolve) => {
+    const sig = (s) => {
+      try { process.kill(-pid, s); return; } catch (e1) {
+        try { process.kill(pid, s); } catch (e2) { /* 已退出 */ }
+      }
+    };
+    try {
+      sig('SIGTERM');
+    } catch (err) {
+      resolve({ ok: false, error: (err && err.message) || String(err) });
+      return;
+    }
+    const deadline = Date.now() + 3000;
+    const iv = setInterval(() => {
+      if (!pidAlive(pid)) {
+        clearInterval(iv);
+        resolve({ ok: true, code: 0 });
+        return;
+      }
+      if (Date.now() >= deadline) {
+        clearInterval(iv);
+        try { sig('SIGKILL'); } catch (err) { /* 忽略 */ }
+        resolve({ ok: !pidAlive(pid), code: 0 });
+      }
+    }, 200);
   });
 }
 
@@ -1216,23 +1418,23 @@ async function stopCore(rec) {
         if (closed) {
           method = 'graceful';
         } else {
-          // 4. 优雅路径超时 -> taskkill /PID <pid> /T /F
-          const k = await taskkillProcess(rec2.pid);
+          // 4. 优雅路径超时 -> 强制终止（Windows taskkill / POSIX SIGTERM→SIGKILL）
+          const k = await terminateProcess(rec2.pid);
           if (!k.ok && pidAlive(rec2.pid)) {
-            throw new AppError('STOP_FAILED', 'taskkill 执行失败: ' + (k.error || ('退出码 ' + k.code)), { needLogTail: true });
+            throw new AppError('STOP_FAILED', '强制终止执行失败: ' + (k.error || ('退出码 ' + k.code)), { needLogTail: true });
           }
         }
       } else {
-        // 插件不可达（health null）：跳过无效 POST，直接 taskkill
-        const k = await taskkillProcess(rec2.pid);
+        // 插件不可达（health null）：跳过无效 POST，直接强制终止
+        const k = await terminateProcess(rec2.pid);
         if (!k.ok && pidAlive(rec2.pid)) {
-          throw new AppError('STOP_FAILED', 'taskkill 执行失败: ' + (k.error || ('退出码 ' + k.code)), { needLogTail: true });
+          throw new AppError('STOP_FAILED', '强制终止执行失败: ' + (k.error || ('退出码 ' + k.code)), { needLogTail: true });
         }
       }
     } else {
-      const k = await taskkillProcess(rec2.pid);
+      const k = await terminateProcess(rec2.pid);
       if (!k.ok && pidAlive(rec2.pid)) {
-        throw new AppError('STOP_FAILED', 'taskkill 执行失败: ' + (k.error || ('退出码 ' + k.code)), { needLogTail: true });
+        throw new AppError('STOP_FAILED', '强制终止执行失败: ' + (k.error || ('退出码 ' + k.code)), { needLogTail: true });
       }
     }
     // 5. 轮询端口关闭最长 10s；仍未关 -> STOP_FAILED + logTail

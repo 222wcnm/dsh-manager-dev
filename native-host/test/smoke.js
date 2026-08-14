@@ -88,17 +88,34 @@ const HOST_JS = path.join(ROOT, 'native-host', 'host.js');
 const FAKE_DSH = path.join(__dirname, 'fake-dsh.js');
 const BASE = path.join(ROOT, '.smoke'); // DSH_MANAGER_BASE_DIR（工作区内）
 const TMP = path.join(BASE, 'tmp');
+const IS_WIN = process.platform === 'win32';
+
+// 平台无关的强制清理（M4：Linux/WSL 下无 taskkill，用 SIGKILL 进程组兜底）
+function killPidForce(pid) {
+  if (IS_WIN) {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    return;
+  }
+  try { process.kill(-pid, 'SIGKILL'); } catch (_) {
+    try { process.kill(pid, 'SIGKILL'); } catch (__) { /* 已退出 */ }
+  }
+}
 
 const BASE_ENV = {
   // 测试钩子门控：TEST_MODE=1 才让 DSH_MANAGER_* 钩子生效（主机 host.js 门控）
   DSH_MANAGER_TEST_MODE: '1',
   DSH_MANAGER_BASE_DIR: BASE,
   DSH_BIN_STUB: FAKE_DSH,
-  DSH_MANAGER_PID_CHECK: '0',
-  // 默认屏蔽真实进程枚举（外部发现场景 15-19 会用自己的钩子覆盖）：
-  // 本机常驻真实 dsh web（127.0.0.1:8080）会让「空目录→stopped」类场景误报 external。
-  DSH_MANAGER_FAKE_PROCESSES: '[]',
 };
+// Windows：默认围栏真实进程枚举 + 关闭 PID 命令行校验——
+//   本机常驻真实 dsh web（127.0.0.1:8080）会让「空目录→stopped」类场景误报 external，
+//   tasklist 管道在受限沙箱亦曾受限。
+// POSIX（WSL Kali 等）：不设围栏、不关 PID 校验——让真实 /proc 枚举、/proc/net/tcp
+//   端口表与 /proc PID 校验直接参与冒烟（design §6.8 平台层实测）。
+if (IS_WIN) {
+  BASE_ENV.DSH_MANAGER_FAKE_PROCESSES = '[]';
+  BASE_ENV.DSH_MANAGER_PID_CHECK = '0';
+}
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -220,13 +237,13 @@ function runHost(req, tag, extraEnv) {
   }
 }
 
-// 强制清理：taskkill 残留 fake-dsh（按 run 记录 pid + 额外 pid），删除 .smoke
+// 强制清理：kill 残留 fake-dsh（按 run 记录 pid + 额外 pid），删除 .smoke
 function cleanup(extraPids) {
   const rec = readRunFile();
   const pids = new Set(Array.isArray(extraPids) ? extraPids : []);
   if (rec && Number.isInteger(rec.pid) && rec.pid > 0) pids.add(rec.pid);
   for (const pid of pids) {
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    killPidForce(pid);
   }
   try { fs.rmSync(BASE, { recursive: true, force: true }); } catch (_) {}
 }
@@ -964,9 +981,61 @@ async function scenarioPortZero() {
     && stH.result.port === null && stH.result.requestedPort === 0,
     '25 占位期 status：starting + port:null + requestedPort:0（发现失败不误判）',
     JSON.stringify(stH && stH.result));
-  spawnSync('taskkill', ['/PID', String(silent.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  killPidForce(silent.pid);
   await waitPidGone(silent.pid, 5000);
 
+  cleanup();
+}
+
+// ---------------------------------------------------------------------------
+// 场景 26（仅 POSIX）：平台层实测（design §6.8）——不注入任何 fake 钩子，
+// 真实 /proc 枚举 + /proc/net/tcp 端口表 + /proc PID 命令行校验 + 指纹探测。
+// Windows 记 SKIP：其平台路径由 smoke-real 外部发现段与 M1 生产实测覆盖。
+// ---------------------------------------------------------------------------
+async function scenarioPosixPlatform() {
+  if (IS_WIN) {
+    recordSkip('场景', '26 POSIX 平台层实测（/proc 枚举+端口表+PID 校验+指纹）',
+      'Windows 平台：由 smoke-real 外部发现段与 M1 生产实测覆盖');
+    return;
+  }
+  cleanup();
+  // 复制 fake-dsh 到「真实 dsh」形态路径：真实 /proc/<pid>/cmdline 必须匹配
+  // classifyDshCmdline 的 bin.js 指纹（node .../node_modules/@deepseek-ai/dsh/lib/bin.js --port N）
+  const fakeBin = path.join(BASE, 'npm-global', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+  fs.mkdirSync(path.dirname(fakeBin), { recursive: true });
+  fs.copyFileSync(FAKE_DSH, fakeBin);
+  const ext = spawn(process.execPath, [fakeBin, '--port', '31926'], {
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  try {
+    const ready = await waitPort(31926, 5000);
+    expect(ready, '26 外部 fake-dsh(31926) 就绪', 'pid=' + ext.pid);
+    // 不注入 fake 钩子：真实 listNodeProcesses(/proc) + listTcpListeners(/proc/net/tcp) + 指纹
+    const s = runHost({ id: 's26', action: 'status', payload: {} }, 's26');
+    expect(s && s.ok === true && s.result.state === 'external'
+      && s.result.port === 31926 && s.result.pid === ext.pid,
+      '26 /proc 枚举+端口表发现外部实例（pid+port 一致）', JSON.stringify(s && s.result));
+    // adopt -> 回写 run 记录（adopted 标记在记录上，不在响应 result 里）；随后的 status
+    // 走真实 /proc PID 校验（cmdline 含 dsh -> 存活）
+    const a = runHost({ id: 's26a', action: 'adopt', payload: { pid: ext.pid, port: 31926 } }, 's26a');
+    expect(a && a.ok === true && a.result.state === 'running' && a.result.source === 'managed',
+      '26 adopt 接管外部实例', JSON.stringify(a && a.result));
+    const rec = readRunFile();
+    expect(rec && rec.pid === ext.pid && rec.adopted === true,
+      '26 run 记录回写（adopted）', JSON.stringify(rec));
+    const st = runHost({ id: 's26b', action: 'status', payload: {} }, 's26b');
+    expect(st && st.ok === true && st.result.state === 'running' && st.result.port === 31926,
+      '26 status：/proc PID 校验通过 -> running', JSON.stringify(st && st.result));
+    // stop -> fake 提供 lifecycle 端点，优雅停；SIGTERM 强停路径已由场景 22 在 POSIX 实测
+    const so = runHost({ id: 's26c', action: 'stop', payload: {} }, 's26c');
+    expect(so && so.ok === true && so.result.state === 'stopped',
+      '26 stop -> stopped', JSON.stringify(so && so.result));
+    expect(!(await portOpen(31926)), '26 端口 31926 已关闭', '');
+  } finally {
+    if (pidAlive(ext.pid)) killPidForce(ext.pid);
+  }
   cleanup();
 }
 
@@ -1021,6 +1090,8 @@ async function main() {
   try { await scenarioLogs(); } catch (e) { console.log('  场景 24 异常:', e.message); }
   cleanup();
   try { await scenarioPortZero(); } catch (e) { console.log('  场景 25 异常:', e.message); }
+  cleanup();
+  try { await scenarioPosixPlatform(); } catch (e) { console.log('  场景 26 异常:', e.message); }
   cleanup();
 
   const failed = results.filter((r) => !r.ok);

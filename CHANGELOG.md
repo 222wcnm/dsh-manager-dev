@@ -22,6 +22,16 @@
 - smoke-real 新增「外部发现生产路径」只读段：真实 powershell 进程枚举 + netstat +
   指纹探测（实测检测到本机真实 dsh web，`EXTERNAL_UNMANAGED` 保护验证通过）——
   关闭「外部发现生产路径未实测」遗留项。
+- **Linux 平台层实测通过（M4）**：host.js 新增 POSIX 分支（design §6.8）——状态根
+  目录 `$XDG_CONFIG_HOME/dsh-manager` 或 `~/.config/dsh-manager`、强制终止
+  `kill(-pid, SIGTERM)`（进程组）→ 3s → SIGKILL、零依赖 /proc 进程枚举与
+  /proc/net/tcp(+tcp6) 端口表（inode → `/proc/*/fd` 反查 pid）、/proc PID 命令行
+  校验；冒烟**场景 26（POSIX 专属）不注入任何 fake 钩子**，真实平台路径完成外部
+  实例发现/接管/停止全链路。**Kali WSL（WSL2）全量冒烟 346/346 通过**；`BASE_ENV`
+  进程枚举围栏改为仅 Windows 生效（本机常驻真实 dsh web 会干扰「空目录→stopped」
+  场景，Linux 下无围栏让真实 /proc 直接参与冒烟）；新增 `tools/linux/`
+  （`verify-linux.ps1` + `run-smoke-linux.sh`，自动准备便携 Node 22.16.0，幂等）。
+  macOS 三个分支已实现但未实测（无 macOS 设备）。
 - 文档：design.md §8.3/§9.1 与 §6.3 的 start 返回语义矛盾已对齐（宿主轮询至就绪
   后才应答 running）；新增 `docs/upstream-feedback.md`（M5 GitHub Discussions 帖子
   草稿，待用户账号发布）。
