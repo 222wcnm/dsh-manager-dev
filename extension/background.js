@@ -206,7 +206,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 async function refreshBadge() {
   const s = await getSettings();
-  const port = Number(s.port) || DEFAULT_SETTINGS.port;
+  // M4：port 0（动态端口）是合法设置值——不能用 `|| 3080` 兜底（会把 0 吞掉、
+  // 徽标错误地探测 3080）；仅对非法值（NaN/负/非数）回退默认
+  const rawPort = Number(s.port);
+  const port = Number.isFinite(rawPort) && rawPort >= 0 ? rawPort : DEFAULT_SETTINGS.port;
   // M4：port 0（动态端口）无法本地探活——经 native status 判定（宿主解析日志/记录中的实际端口）
   if (port === 0) {
     const resp = await enqueueNativeCall('bg-badge-' + Date.now().toString(36), 'status', {});

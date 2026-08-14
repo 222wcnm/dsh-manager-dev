@@ -260,6 +260,49 @@ async function main() {
   fs.writeFileSync(panelOpenPng, Buffer.from(shot4.data, 'base64'));
   record('panel-open 截图', fs.statSync(panelOpenPng).size > 2000, panelOpenPng + ' (' + fs.statSync(panelOpenPng).size + ' bytes)');
 
+  // 8) 徽标（M4 动态端口路径）：附加扩展 service worker 实测——
+  //    port 0 → refreshBadge 走 native status 分支（本机真实 dsh 在跑 → 绿点）；
+  //    无监听端口 → 清空；恢复默认设置。回归守护 background.js 的 `|| 3080` 吞 0 缺陷。
+  const targets = await fetchJson('http://127.0.0.1:' + PORT + '/json/list');
+  const swCandidates = targets.filter((t) => t.type === 'service_worker');
+  record('徽标：service_worker 目标清单', swCandidates.length > 0,
+    JSON.stringify(swCandidates.map((t) => t.url)));
+  // 必须按本扩展 ID 精确匹配：Chrome 组件扩展也可能有 service_worker
+  // （其 SW 无 chrome.action/chrome.storage API），find 首个会选错
+  const swTarget = swCandidates.find((t) => (t.url || '').includes(extId));
+  if (!swTarget) {
+    record('徽标（扩展 SW 目标）', false, '未找到扩展 service worker target');
+  } else {
+    try {
+      const sw = await connectWs(swTarget.webSocketDebuggerUrl);
+      await sw.send('Runtime.enable');
+      const evalInSw = async (expr) => {
+        const r = await sw.send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
+        if (!r || !r.result) return { value: undefined, raw: JSON.stringify(r) };
+        if (r.result.exceptionDetails) {
+          return { value: undefined, raw: 'exception: ' + JSON.stringify(r.result.exceptionDetails).slice(0, 500) };
+        }
+        return { value: r.result.value, raw: '' };
+      };
+      const probe = await evalInSw(`JSON.stringify({ chrome: typeof chrome, action: typeof (typeof chrome !== 'undefined' && chrome.action), getBadgeText: typeof (typeof chrome !== 'undefined' && chrome.action && chrome.action.getBadgeText), refreshBadge: typeof refreshBadge, storage: typeof (typeof chrome !== 'undefined' && chrome.storage) })`);
+      record('徽标：SW 环境探针', true, String(probe.value));
+      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 0, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
+      await evalInSw('refreshBadge()');
+      const badge0 = await evalInSw('chrome.action.getBadgeText({})');
+      record('徽标：port 0 经 native status 显示绿点', badge0.value === '●', 'badge=' + JSON.stringify(badge0.value) + (badge0.raw ? ' ' + badge0.raw : ''));
+      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 59999, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
+      await evalInSw('refreshBadge()');
+      const badgeNone = await evalInSw('chrome.action.getBadgeText({})');
+      record('徽标：无监听端口清空', badgeNone.value === '', 'badge=' + JSON.stringify(badgeNone.value) + (badgeNone.raw ? ' ' + badgeNone.raw : ''));
+      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
+      await evalInSw('refreshBadge()');
+      const badgeDefault = await evalInSw('chrome.action.getBadgeText({})');
+      record('徽标：恢复默认端口后无异常', badgeDefault.value === '●' || badgeDefault.value === '', 'badge=' + JSON.stringify(badgeDefault.value) + (badgeDefault.raw ? ' ' + badgeDefault.raw : ''));
+    } catch (e) {
+      record('徽标（扩展 SW 目标）', false, 'SW 附加失败: ' + e.message);
+    }
+  }
+
   await cleanup();
   const failed = results.filter((r) => !r.ok);
   log('=== 汇总 ===  PASS ' + (results.length - failed.length) + ' / FAIL ' + failed.length);

@@ -26,6 +26,13 @@
   后才应答 running）；新增 `docs/upstream-feedback.md`（M5 GitHub Discussions 帖子
   草稿，待用户账号发布）。
 
+### Fixed
+- 徽标动态端口分支死代码：`Number(s.port) || DEFAULT_SETTINGS.port` 会把合法设置值
+  0 吞掉（port 0 时徽标错误地探测 3080）——改为 `Number.isFinite` 校验后原样使用；
+  verify-cdp 新增徽标三步实测（附加扩展 SW：port 0 → 绿点、无监听端口 → 清空、
+  恢复默认），并修正 SW 目标选择（Chrome 组件扩展的 service_worker 会干扰 find 首个）。
+- popup starting 状态在动态端口下显示「端口自动分配中」。
+
 ## [未发布] - M3 体验增强
 
 ### Added

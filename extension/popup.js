@@ -388,7 +388,8 @@ function render() {
       + (detail && detail.pid ? ' · PID ' + detail.pid : '')
       + (detail && detail.externalCount > 1 ? ' · 共 ' + detail.externalCount + ' 个外部实例' : '');
   } else if (state === 'starting') {
-    text = '状态：starting（正在启动…）';
+    text = '状态：starting（正在启动…'
+      + (detail && detail.requestedPort === 0 ? '，端口自动分配中' : '') + '）';
   } else if (state === 'stopping') {
     text = '状态：stopping（正在停止…）';
   } else if (isError) {
