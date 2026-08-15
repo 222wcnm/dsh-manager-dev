@@ -71,12 +71,13 @@ try {
     Write-Host '2/4 替换为发布版 CHANGELOG...'
     Copy-Item (Join-Path $PSScriptRoot 'release-changelog.md') (Join-Path $tempDir 'CHANGELOG.md') -Force
 
-    # 内部过程文档不出现在公开仓库（约定见开发仓库 docs/publish.md）
+    # 内部过程文档与开发期素材不出现在公开仓库（约定见开发仓库 docs/publish.md）
     foreach ($f in @(
         'docs/open-source-review.md',
         'docs/upstream-feedback.md',
         'docs/publish.md',
-        'CHROMEWEBSTORE.md'
+        'CHROMEWEBSTORE.md',
+        'tools/icons/_user-whale-smooth.svg'  # 开发期备选素材（鲸鱼平滑剪影），不入发布版
     )) {
         Remove-Item (Join-Path $tempDir $f) -Force -ErrorAction SilentlyContinue
     }

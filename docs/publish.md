@@ -23,6 +23,7 @@ dsh-manager 的公开仓库按「**内容镜像 + 增量提交**」方案准备�
 - `docs/upstream-feedback.md` —— M5 GitHub Discussions 帖子草稿（含待填占位）
 - `docs/publish.md` —— 本文件：发布操作清单，开发仓库自用
 - `CHROMEWEBSTORE.md` —— 商店上架素材（暂缓上架，保留待用）
+- `tools/icons/_user-whale-smooth.svg` —— 开发期备选素材（鲸鱼平滑剪影），不入发布版
 
 ## 仓库话题（Topics）
 
