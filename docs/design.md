@@ -806,34 +806,37 @@ console.log(JSON.stringify({ key, id }, null, 2));
 
 ```
 dsh-manager/
+├─ AGENTS.md / README.md / CHANGELOG.md / CHROMEWEBSTORE.md / CONTRIBUTING.md
 ├─ docs/
-│  └─ design.md                  # 本文档
+│  ├─ design.md                  # 本文档
+│  └─ publish.md / upstream-feedback.md / open-source-review.md …
 ├─ extension/                    # 浏览器扩展（可直接「加载已解压的扩展程序」）
 │  ├─ manifest.json
-│  ├─ background.js
-│  ├─ popup.html
-│  ├─ popup.css
-│  ├─ popup.js
-│  ├─ logs.html                   # M3 日志查看页
-│  ├─ logs.css
-│  ├─ logs.js
+│  ├─ background.js / popup.html / popup.css / popup.js
+│  ├─ logs.html / logs.css / logs.js      # M3 日志查看页
 │  ├─ content/
 │  │  └─ panel.js                 # M3 页面内管理面板（content script，样式内联 + Shadow DOM）
+│  ├─ scripts/keygen.js           # 扩展 ID 密钥生成工具
 │  └─ icons/{16,48,128}.png
 ├─ native-host/
 │  ├─ host.js                    # 宿主主程序（零依赖）
-│  ├─ host.cmd.template          # 安装器生成 .cmd 的模板
-│  ├─ com.dsh.manager.json.template
-│  ├─ install.ps1
-│  ├─ uninstall.ps1
-│  ├─ install.sh                  # Linux/macOS 安装器（M4，用户级 NativeMessagingHosts 清单）
-│  ├─ uninstall.sh                # Linux/macOS 卸载器（M4）
+│  ├─ host.cmd.template / com.dsh.manager.json.template
+│  ├─ compute-id.js              # 扩展 ID 计算工具
+│  ├─ install.ps1 / uninstall.ps1        # Windows 安装/卸载器
+│  ├─ install.sh / uninstall.sh          # Linux/macOS 安装/卸载器（M4）
 │  └─ test/
-│     └─ smoke.ps1               # 离线冒烟：直接管道喂 JSON 测宿主（见 §14）
-├─ plugin/                       # M2 生命周期插件（独立 npm 包，dsh 侧）
-│  └─ dsh-lifecycle/ …
-├─ README.md                     # 用户安装/使用指引
-└─ CHANGELOG.md
+│     ├─ smoke.js                # 宿主冒烟 27 场景（--req/--res 文件模式，见 §14）
+│     ├─ smoke-real.js           # 真实 dsh 集成（best-effort，隔离 DSH_HOME）
+│     ├─ fake-dsh.js             # 伪 dsh bin（冒烟用，支持 --port 0 / lifecycle 端点）
+│     └─ manual-e2e.md / VERIFICATION.md
+├─ plugin/dsh-lifecycle/         # M2 生命周期插件（独立 npm 包，dsh 侧）
+├─ tools/                        # 开发期工具
+│  ├─ icons/                     # 鲸鱼图标生成（headless Chrome 渲染）
+│  ├─ linux/                     # WSL Linux 冒烟/E2E 验证脚本
+│  ├─ publish/                   # 发布副本构建（robocopy /MIR + tar 中转）
+│  ├─ verify-ui/                 # 扩展 UI 自动验收（CDP / MCP 两路径）
+│  └─ visual-audit/              # 视觉审计
+└─ …                             # LICENSE / NOTICE / SECURITY.md 等
 ```
 
 ---
@@ -897,7 +900,7 @@ dsh-manager/
 
 ### 14.1 宿主冒烟（不依赖浏览器）
 
-`test/smoke.js`（26 场景，2026-08-14 计数：Windows 339 PASS + 1 SKIP / Linux 346 PASS）：以 `--req/--res` 文件模式逐请求
+`test/smoke.js`（27 场景，2026-08-15 计数：Windows 347 PASS + 1 SKIP / Linux 337 PASS + 1 SKIP——场景 26 POSIX 专属、场景 27 载体为 Windows 专属）：以 `--req/--res` 文件模式逐请求
 拉起 `node host.js`（沙箱管道受限环境兼容），伪 dsh 由 `DSH_BIN_STUB` 指向
 `test/fake-dsh.js`（含 lifecycle 端点、`--port 0`、退出立即/不打印 URL 变体），
 状态目录隔离在工作区 `.smoke`，`BASE_ENV` 围栏真实进程枚举**仅 Windows 生效**（本机常驻真实 dsh web 会干扰「空目录→stopped」场景）。覆盖：ping/status
