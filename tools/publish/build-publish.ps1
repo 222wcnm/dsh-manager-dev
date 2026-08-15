@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     DSH Manager — 重建发布副本（tools/publish/build-publish.ps1）
 
