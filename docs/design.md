@@ -613,7 +613,7 @@ export function apply(ctx) {
 2. 所有 native 请求经 SW 中转（§8.3），popup 不直接 `connectNative`（避免 popup 关闭瞬间断开连接、杀死宿主中断操作）。
 3. `starting` 成功后自动 `chrome.tabs.create` 打开 Web UI（可在设置关闭）。
 4. 错误态展示错误码对应文案（§6.2 表）+「复制日志」按钮（日志内容由宿主在错误响应中带回尾部 20 行）。
-5. 设置面板（popup 内二级视图）：port（默认 3080，**0 = 自动分配动态端口**，M4）、profile（默认 web）、host（固定 127.0.0.1，不可改，v1）、自动打开 UI 开关、徽标刷新间隔。存储于 `chrome.storage.local`（本机相关，不用 sync）。面板底部有一行灰字说明：**「dsh 在后台以无控制台方式运行，执行命令时可能闪现临时终端窗口（上游沙箱限制，暂无开关可消除）」**（原「显示 dsh 控制台窗口」开关已移除——实测 detached 下 `windowsHide` 不生效、两种状态行为相同，见 §6.3 第 5 步）；保存成功 toast 提示「设置已保存」。
+5. 设置面板（popup 内二级视图）：port（默认 3080，**0 = 自动分配动态端口**，M4）、profile（默认 web）、host（固定 127.0.0.1，不可改，v1）、自动打开 UI 开关、徽标刷新间隔。存储于 `chrome.storage.local`（本机相关，不用 sync）。保存成功 toast 提示「设置已保存」。注：原「显示 dsh 控制台窗口」开关及其灰字说明均已移除——开关本身无效（实测 detached 下 `windowsHide` 不生效），说明文案已过时（M5.5 隐藏控制台载体已消除命令执行闪窗，见 §6.3 第 5 步）。
 6. popup 富状态与提示（M2）：status 返回 `lifecycle:true` 时明细行展示 `health` 富状态（uptime 格式化 + nodeVersion），底部提示「优雅停机已启用（dsh-lifecycle）」；`lifecycle:false` 时提示「安装 dsh-lifecycle 插件可优雅停机」；stop 完成 toast 按 `stopMethod` 区分「已优雅停止 / 已强制停止（未检测到插件或优雅超时）」。
 7. `external` 状态（§6.6）：蓝点 + 「外部运行」；「接管」与「打开 Web UI」可用（启动/停止/重启禁用）；URL 行展示实际地址；明细行展示 PID 与「外部启动，点击接管后由扩展管理」；`externalCount > 1` 时追加实例数提示。
 8. 「接管」（§6.7）：以 status 结果中的 `{pid, port}` 调 `adopt`；成功 → 立即刷新为 running/managed，按钮恢复标准三键；失败按错误码展示（`EXTERNAL_UNMANAGED` 提示实例已变化，重新打开 popup 刷新）。
