@@ -8,6 +8,8 @@
 //
 // 关键决策（design §8.6）：
 //   - 指纹激活：仅 document.title 含 "DeepSeek Harness" 才注入，误注入面为零；
+//   - 归属验证：仅当扩展管理的实例运行中且端口与当前页面一致时才开放操作；
+//     其余情况（stopped、端口不匹配、外部/WSL 启动的实例）一律只读提示「未托管」；
 //   - Shadow DOM：宿主节点 + open shadow root，样式内联在 shadow 内，与页面
 //     CSS 双向零干扰；颜色用 --dsw-* 令牌（CSS 自定义属性可穿透 shadow 继承）
 //     并带 fallback；
@@ -239,35 +241,50 @@
 
   function renderStatus() {
     if (!busy) dot.className = 'dot ' + dotStateClass();
+    // 归属验证：页面身份 ≠ 进程归属（页面标题只说明「有 dsh 的 UI」，不说明
+    // 「这个 dsh 归扩展管」——WSL/终端启动的实例同样满足注入指纹）。因此仅当
+    // 扩展管理的实例正在运行且其端口与当前页面端口一致时，本面板才有控制权；
+    // 其余情况一律只读，防止在非本扩展实例的页面上误触发停止/重启。
+    const pagePort = Number(window.location.port) || 0;
+    const repPort = detail && Number(detail.port);
+    const isManagedHere = state === 'running' && repPort === pagePort;
+    const isExternalHere = state === 'external' && repPort === pagePort;
     let text = '';
-    if (state === 'running') {
+    let chip = '';
+    if (state === 'unknown') {
+      // 状态未就绪：保持中性占位，按钮先禁用（refresh 很快收敛）
+      if (!busy) { btnStop.disabled = true; btnRestart.disabled = true; }
+      return;
+    } else if (isManagedHere) {
       text = '运行中';
-      if (detail && Number.isInteger(detail.port)) text += ' · 端口 ' + detail.port;
+      if (Number.isInteger(repPort)) text += ' · 端口 ' + repPort;
       if (detail && detail.health && detail.health.ok) text += ' · 健康';
-      chipText.textContent = 'dsh web · ' + (detail && Number.isInteger(detail.port) ? detail.port : '运行中');
-    } else if (state === 'external') {
+      chip = 'dsh web · ' + (Number.isInteger(repPort) ? repPort : '运行中');
+    } else if (isExternalHere) {
       text = '外部实例（非本扩展启动）';
-      if (detail && Number.isInteger(detail.port)) text += ' · 端口 ' + detail.port;
-      chipText.textContent = 'dsh web · 外部';
+      if (Number.isInteger(repPort)) text += ' · 端口 ' + repPort;
+      chip = 'dsh web · 外部';
     } else if (state === 'starting') {
       text = '正在启动…';
-      chipText.textContent = 'dsh web · 启动中';
+      chip = 'dsh web · 启动中';
     } else if (state === 'stopping') {
       text = '正在停止…';
-      chipText.textContent = 'dsh web · 停止中';
+      chip = 'dsh web · 停止中';
     } else if (state === 'error') {
       text = '状态获取失败';
-      chipText.textContent = 'dsh web · 错误';
+      chip = 'dsh web · 错误';
     } else {
-      text = '已停止';
-      chipText.textContent = 'dsh web';
+      // stopped，或 running/external 但端口与当前页面不一致：
+      // 当前页面的 dsh 不由本扩展管理（如终端/WSL 启动的另一实例）
+      text = '此实例不由本扩展管理（请在扩展 popup 中操作）';
+      chip = 'dsh web · 未托管';
     }
     statusText.textContent = text;
-    // running 可停止/重启；stopped 时重启等价于启动（宿主 restart 退化为 start）
-    const running = state === 'running';
+    chipText.textContent = chip;
+    // 仅「扩展管理的实例（运行中且端口匹配）」可停止/重启；其余一律只读
     if (!busy) {
-      btnStop.disabled = !running;
-      btnRestart.disabled = !(running || state === 'stopped');
+      btnStop.disabled = !isManagedHere;
+      btnRestart.disabled = !isManagedHere;
     }
   }
 
@@ -312,8 +329,7 @@
       const resp = await nativeRequest('stop', {});
       if (resp && resp.ok) {
         state = 'stopped';
-        feedback.textContent = '已停止。可点「重启」恢复。';
-        chipText.textContent = 'dsh web';
+        feedback.textContent = '已停止。如需再次管理，请在扩展 popup 中操作。';
       } else if (resp && resp.error && resp.error.code === 'ALREADY_STOPPED') {
         state = 'stopped';
         feedback.textContent = 'dsh web 已停止（幂等）。';
