@@ -5,7 +5,25 @@
 
 ## [未发布] - M4 跨平台/跨浏览器（进行中）
 
+### Removed
+- **「显示 dsh 控制台窗口」设置项与协议字段 `windowsHide` 已移除**（2026-08-15 实测核验）：
+  Node `detached:true` 在 Windows 下由 libuv 无条件加 `DETACHED_PROCESS`（子进程既不继承
+  也不新建控制台），`windowsHide` 不产生任何实际差异——勾选与取消勾选均无常驻控制台窗口、
+  命令执行均闪现临时终端窗口（上游受限令牌限制，`CREATE_NO_WINDOW` 不可用，见
+  `@deepseek-ai/dsh-sandbox-windows-acl` README）。popup 设置面板改为灰字如实说明；design
+  §6.3 第 5 步同步修订；原 smoke 场景 27 与相关断言移除（场景 27 号复用于 M5.5 载体链路测试）。
+
 ### Added
+- **Windows 隐藏控制台载体（M5.5，2026-08-15）**：消除 dsh 命令执行闪窗——host.js 在
+  Windows 下经 `launch-hidden.vbs`（`BASE_DIR` 下运行时自生成）+ `wscript.exe` +
+  `WScript.Shell.Run(cmd, 0, False)`（SW_HIDE）拉起 dsh：dsh 获得**存在但从不显示**的
+  控制台，其命令子进程继承该控制台（不再弹临时终端），桌面也无常驻窗口；命令经
+  `DSH_MANAGER_LAUNCH_CMD` 环境变量传递、显式经 `cmd /d /c call` 执行以生效
+  `1>> 日志 2>&1` 重定向（`WshShell.Run` 对引号开头命令直接 CreateProcess 会吞掉
+  重定向）；run 记录 pid 在端口就绪后经端口表（netstat）反查（`findPidByPort`），
+  `START_TIMEOUT` 时尽力反查回写以便仍可停止；POSIX 维持直接 spawn。实测核验：真实
+  dsh 载体启动成功、控制台窗口不可见、停止后无孤儿；smoke 场景 27（Windows）新增
+  载体链路断言，全量 **PASS 347 / FAIL 0**。
 - `--port 0` 动态端口支持（design §6.3 start 第 9 步）：start 以 `--port 0` 拉起 dsh，
   从日志（spawn 时刻偏移之后）解析 `dsh web: http://127.0.0.1:<port>` URL 行回填
   run 记录实际端口；status 遇占位记录同样自愈回填（回填前 `port:null` +

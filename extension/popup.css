@@ -569,6 +569,21 @@ body {
   accent-color: var(--dsw-alias-state-business-primary);
 }
 
+/* 带下方说明文字的字段组（如设置面板底部的运行方式说明） */
+.field-wrap {
+  margin-bottom: 8px;
+}
+
+.field-wrap .field {
+  margin-bottom: 4px;
+}
+
+.field-help {
+  color: var(--dsw-alias-label-caption);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .settings-error {
   margin-bottom: 8px;
   color: var(--dsw-alias-state-error-primary);
