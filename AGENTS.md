@@ -28,7 +28,7 @@ node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单�
 powershell -ExecutionPolicy Bypass -File native-host\install.ps1 -DryRun   # 安装预演（Windows）
 sh native-host/install.sh --dry-run                                          # 安装预演（Linux/macOS）
 powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E  # WSL Linux 冒烟 + 真实安装 E2E
-node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 28 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + console 异常检查）
+node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 33 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 面板体验回归（托管绿点+端口、展开时胶囊位置不变、面板在胶囊上方、扩展重载后旧面板提示刷新/刷新恢复） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + console 异常检查）
 node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome-devtools-mcp，需沙箱外）
 ```
 
@@ -58,6 +58,17 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
   run 记录 pid 端口就绪后经 netstat 反查（`findPidByPort`），START_TIMEOUT 尽力回写；
   POSIX 维持直接 spawn。实测：真实 dsh 载体启动窗口不可见、停止无孤儿；冒烟场景 27
   （Windows）新增，全量 PASS 347/348。
+- **M3.1 完成（2026-08-16：页面内管理面板体验修复，verify-cdp 33/33）**：① 修复
+  「扩展重载/更新后旧面板永久红灯『状态获取失败』直到刷新页面」——已 CDP 实测复现
+  （重载扩展 → 红错；刷新 → 恢复）：旧内容脚本上下文失效（`chrome.runtime.id` 为空）
+  时停止轮询并提示「扩展已重载或更新，请刷新页面恢复」（中性灰，徽章「已断开」）；
+  单次 status 失败不再立即红（连续 3 次约 6s 才显示错误态，吸收 MV3 SW 休眠/唤醒
+  竞态，期间保留上次成功状态）。② 圆点颜色改随展示语义：绿=本页托管运行中、蓝=
+  外部实例、灰=未托管/已停止、琥珀=过渡、红=连续失败（此前「未托管」页面误显绿灯）。
+  ③ 展开面板不再顶动胶囊：面板体绝对定位在胶囊上方弹出（此前 body 流内布局把胶囊
+  向上顶起）。verify-cdp 新增 5 条回归断言（托管绿点+端口显示、展开时胶囊位置不变、
+  面板在胶囊上方、扩展重载后提示刷新非红错、刷新页面后恢复托管状态），全量 PASS 33 /
+  FAIL 0；design §8.6 同步修订。
 - M4 跨平台/Firefox（`--port 0` 已支持）→ M5 上游反馈（**官方暂不接受外部 PR**（2026-08-13 公告），走 GitHub Discussions 与插件生态；**Discussions 帖子草稿已备好**：`docs/upstream-feedback.md`，需用户 GitHub 账号发布并回填链接；若开放 PR 再提 lifecycle 子命令）
 - **M3 完成（2026-08-14）**：冒烟 324/324 + verify-cdp 28/28。① 日志查看：宿主只读 `logs` 动作（design §6.3：`tailLines`/`maxBytes`/`beforeByte` 分页，UTF-8 字节精确 + 行边界对齐，块间严格衔接；修复行边界误删首行与尾部截断多删一行两个缺陷）+ 扩展日志查看页 `logs.html/js/css`（design §8.4：2s 自动刷新、贴底跟随、加载更早、复制全部、错误横幅，textContent 渲染）+ popup「查看日志」入口。② 页面内管理面板：`content/panel.js`（design §8.6，**content script 方案替代 dsh client 插件**——实测核验外部插件无独立构建路径，见 §8.6 决策）：dsh 指纹页面右下角注入 shadow 面板（状态徽章 + 展开后停止两步确认/重启，全部动作经 SW → 宿主全套防护）。③ UI 自动验收 `tools/verify-ui`：`verify-cdp.js` 零依赖 CDP（headless Chrome + `Extensions.loadUnpacked`，沙箱内实测 28/28：popup/logs/面板注入与展开断言 + 面板停止两步确认态（首击确认/3s 还原，不执行）+ 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测（附加扩展 SW）+ console 检查，视觉核验经 vision 工具确认）；`verify-ui.js` 为 chrome-devtools-mcp 路径（stdio 传输被沙箱拦管道，需沙箱外，版本钉 1.7.0）。
 - **开源前审查与修复已完成**（含 5 项阻断发现与处理状态）：① 本机用户名/绝对路径已去个人化（`<user>` / `<repo-root>` 占位、tools 用 `__dirname` 推导）；② `.reg` 现场产物不入库（`.gitignore`）；③ 鲸鱼 logo 品牌风险 → README 免责声明 + NOTICE 声明（logo 替换计划中）；④ `appExit` 语义措辞校正（优雅 dispose 请求，退出依赖事件循环排空，宿主以端口关闭为权威）；⑤ 插件 HTTP 围栏已补 `sec-fetch-site` 校验并增 shutdown 幂等（409）——插件单测 21/21 通过。另：宿主测试钩子门控（`DSH_MANAGER_TEST_MODE=1`）、adopt 重放危险参数过滤、install/uninstall 加固（JSON 转义、PID 命令行校验）、冒烟增至 95 断言（94 PASS + 1 环境 SKIP）。

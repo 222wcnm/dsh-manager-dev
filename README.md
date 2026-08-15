@@ -94,7 +94,7 @@ popup 设置里换端口，或设成 `0` 自动分配。占用者若是另一个
 | Windows 冒烟 | Windows 11 Pro + Chrome / Edge | 全新克隆 332 PASS + 4 SKIP（3 项本地产物核对 + 1 项 POSIX 场景跳过）；开发机 347 PASS + 1 SKIP（含 M5.5 载体链路场景 27） |
 | Linux 冒烟 | Kali WSL（WSL2）+ 便携 Node 22.16.0 | 337 PASS + 1 SKIP（真实 /proc 进程枚举与端口表、SIGTERM 终止、`--port 0` 全链路；场景 27 载体为 Windows 专属跳过） |
 | 真实 dsh 集成 | @deepseek-ai/dsh 0.1.0-rc.6（npm latest，2026-08 基线） | smoke-real：启动/停止全链路 + `--port 0` 真机回填 + 外部发现生产路径 |
-| 扩展 UI | headless Chrome + 零依赖 CDP | verify-cdp 28 断言全过（popup / logs / 页面内面板 / 徽标 / console 检查） |
+| 扩展 UI | headless Chrome + 零依赖 CDP | verify-cdp 33 断言全过（popup / logs / 页面内面板（含胶囊位置稳定、扩展重载后提示刷新/恢复）/ 徽标 / console 检查） |
 | 生命周期插件 | dsh-lifecycle | 单测 21/21 |
 
 没测的（不装）：
