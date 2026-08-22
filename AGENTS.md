@@ -28,7 +28,7 @@ node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单�
 powershell -ExecutionPolicy Bypass -File native-host\install.ps1 -DryRun   # 安装预演（Windows）
 sh native-host/install.sh --dry-run                                          # 安装预演（Linux/macOS）
 powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E  # WSL Linux 冒烟 + 真实安装 E2E
-node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 71 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 面板体验回归（托管绿点+端口、展开时胶囊位置不变、面板在胶囊上方、扩展重载后旧面板提示刷新/刷新恢复） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + M8 徽标提醒（SW 分层 done「!」/ waiting「?」/ 清空恢复 + e2e 后台页注入等待标记 → 紫「?」→ 切回标签自动清除）+ 主题与深色断言（面板深色跟随、storage 镜像写入、popup 四态 + Emulation 系统模拟、深色段无新增 console 异常）+ M7 断言（状态卡结构/文案、状态变体（running 实心点呼吸 / external / busy 琥珀脉冲无矩阵 / error 红调卡 / stopped 灰点）、深/浅状态卡背景（深=#353638 精确值）、面板呼吸动画）+ console 异常检查）
+node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 74 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 面板体验回归（托管绿点+端口、展开时胶囊位置不变、面板在胶囊上方、扩展重载后旧面板提示刷新/刷新恢复） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + M8/M8.1 徽标提醒（SW 分层 done「!」/ waiting「?」/ 蓝 n 工作中计数 / 9+ 边界 / done>working 优先级 / 清空恢复 + 角标断言（icon 状态 + title）+ e2e 后台页注入等待标记 → 紫「?」→ 切回标签自动清除）+ 主题与深色断言（面板深色跟随、storage 镜像写入、popup 四态 + Emulation 系统模拟、深色段无新增 console 异常）+ M7 断言（状态卡结构/文案、状态变体（running 实心点呼吸 / external / busy 琥珀脉冲无矩阵 / error 红调卡 / stopped 灰点）、深/浅状态卡背景（深=#353638 精确值）、面板呼吸动画）+ console 异常检查）
 node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome-devtools-mcp，需沙箱外）
 ```
 
@@ -81,6 +81,13 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
   onInstalled 合并丢弃主题）；⑥ **L2**：verify 断言补 fg=白（`getBadgeTextColor`）；
   e2e 以 storage `attentionMap` 条目为链路证据（防「页面原生 warning」假阳性）+ `hidden`
   显式断言 + 轮询替代固定 sleep（M4 缓解）。verify-cdp M8 段现为 7 断言 + 1 e2e 异常兜底记录。
+  **M8.1 徽标语义重构（2026-08-22 用户决策，design §8.9/§8.9.1，verify-cdp 74/74）**：双载体分层——
+  实例状态层 → **图标角标**（setIcon 预生成变体 `icons/{ok,error}-*.png`：绿点=运行/红点=错误·未装宿主/
+  无点=停止）；徽标 → 会话状态层（紫?=等你拍板 / 琥珀!=完成（`settings.attentionDone` 独立开关）/
+  **蓝 n**=n 会话工作中 #5686fe=webui `--dsh-state-ongoing` 同源，n≥10 显示 9+；优先级 waiting>done>working）。
+  panel.js 扫描改**计数**并隐藏页内计数签名变化即上报（`{op:'set',kind:'idle|working|waiting|done',counts}`）；
+  attentionMap 条目 `{kind,working,waiting,at,port}`，refreshBadge 判实例未运行/异常即按 port 清会话信号
+  （死提醒联动）；自定义语义（预设/字符映射）暂缓（用户先要基础功能）。
 - **M7 完成（2026-08-22：popup 排版优化——方案 A「应用栏 + 状态卡 + 分组设置」，design §8.8，verify-cdp 当前口径 63/63）**：
   解决 §8.2 现行排版的「平铺朴实感」。① **三区结构**（popup.html/css/js）：应用栏
   （20px 鲸鱼 + 「DSH Manager」15/600 + 「dsh web」胶囊标签 + 28px 圆形刷新/设置）、

@@ -726,8 +726,9 @@ body {
   margin-top: 4px;
 }
 
-/* ---- 外观行（M6，复刻 Web UI AppearanceRow themeCube，design §8.7.5） ---- */
-/* 外观行独占：仅 popup.css（logs 页无此 UI）。label 置顶 + 下方 2×2 网格。 */
+/* ---- 外观行（M6 复刻 Web UI AppearanceRow themeCube；2026-08-22 用户决策改为 icon-only，design §8.7.5） ---- */
+/* 外观行独占：仅 popup.css（logs 页无此 UI）。label 置顶 + 下方 4 列图标按钮（高 32，仅图标，
+ * hover 原生 title 提示；为有意偏离 webui 原文案版的用户偏好，功能/选中态/键盘语义不变）。 */
 .field.label-top {
   flex-direction: column;
   align-items: stretch;
@@ -736,7 +737,7 @@ body {
 
 .theme-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   width: 100%;
 }
@@ -745,15 +746,12 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 8px 10px;
+  height: 32px;
+  padding: 0;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 16px;
   background: none;
   color: var(--dsw-alias-label-primary);
-  font-family: var(--dsw-font-family);
-  font-size: 12px;
-  line-height: 1.2;
   cursor: pointer;
   transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out),
     border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out),

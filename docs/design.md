@@ -657,7 +657,7 @@ popup「查看日志」打开的全页日志查看器，视觉延续同一套 `-
 1. **串行化 native 调用**：维护单一 `pending` promise 队列，一次只允许一个 connectNative 连接；并发请求排队（状态模型本身幂等，但串行化可消除锁竞争与 Chrome 多宿主进程）。
 2. 单次 native 往返时长按动作区分：**start/restart 的「轮询到就绪」在宿主侧完成**（start ≤30s 端口轮询 + M4 `--port 0` 的 30s 端口发现；restart = stop≤10s + start≤30s 串行），SW 以更长的兜底超时等待应答（start 60s / restart 120s，§8.3.6）——start 返回的就是 `running`（或超时错误），popup 应用结果后由 2s 轮询收敛（与 §6.3 实现一致；§9 时序为早期草稿，若与本节冲突以本节与 §6.3 为准）。
 3. 连接异常处理：`connectNative` 抛 `Specified native messaging host not found` → 向 popup 返回 `HOST_NOT_INSTALLED`，引导运行安装器。
-4. 徽标刷新：`chrome.alarms`（30s）→ 本地 fetch 探活（不惊动宿主）→ 更新 `action.setBadgeText`（绿点/空白）与 title。**M4：settings.port === 0（动态端口）时本地探活不可行，改经 native `status` 判定**（宿主解析实际端口）。
+4. 徽标刷新：`chrome.alarms`（30s）→ 本地 fetch 探活（不惊动宿主）→ 更新 **图标角标**（`action.setIcon`，绿点=运行/红点=错误/无点=停止，M8.1）+ title；徽标字符专职会话状态层（§8.9）。**M4：settings.port === 0（动态端口）时本地探活不可行，改经 native `status` 判定**（宿主解析实际端口）。
 5. 全部 native 消息走 `chrome.runtime.sendMessage` 的 async 应答（`return true` + `sendResponse`）。
 6. **兜底超时按动作区分（M1.3）**：restart 120s（宿主内 stop≤10s + start≤30s 串行执行）、start 60s、stop/adopt 45s、其余 30s——避免长操作被 30s 兜底误判为「宿主无响应」而返回 `NATIVE_ERROR`（错误信息内附实际秒数）。
 
@@ -750,11 +750,11 @@ popup / logs 页打开或 storage.onChanged 触发
 
 #### 8.7.5 设置 UI：外观行
 
-popup 设置面板新增「外观」行（四个互斥选项按钮，两行 2×2 网格），复刻 Web UI AppearanceRow 主题立方体视觉（同款令牌）：
+popup 设置面板新增「外观」行（四个互斥选项按钮），复刻 Web UI AppearanceRow 主题立方体视觉（同款令牌）。**2026-08-22 用户决策（M6 后修订）：改为 icon-only——一行 4 列网格，按钮仅显示图标（16×16 outline），hover 时以原生 `title` 弹出文案提示；为有意偏离 webui 原文案版的用户偏好（省约 40px 垂直空间），按钮的无障碍名称由 `aria-label` 提供，点选/选中态/键盘语义不变**：
 
-- 按钮：`border: 1px solid var(--dsw-alias-border-l2)`、`border-radius: 16px`、网格 2 列（`grid-template-columns: 1fr 1fr`）、`padding: 8px 10px`、内边距图标 + 文字（12px）；选中态：`background: var(--dsw-alias-bg-module-platform)`（浅色 = bluish-60，深色 = bluish-800，须在两套主题中均定义）+ `border-color: var(--dsw-static-neutral-bluish-400)`。
+- 按钮：`border: 1px solid var(--dsw-alias-border-l2)`、`border-radius: 16px`、网格 4 列（`grid-template-columns: repeat(4, 1fr)`）、`height: 32px; padding: 0`（图标水平/垂直居中）；选中态：`background: var(--dsw-alias-bg-module-platform)`（浅色 = bluish-60，深色 = bluish-800，须在两套主题中均定义）+ `border-color: var(--dsw-static-neutral-bluish-400)`。
 - 键盘可访问性（radiogroup 规范）：选中项 `tabindex=0`（roving），其余 `-1`；`keydown` 处理 ArrowLeft/Right/Up/Down（循环换选）+ Home/End（首/末），换选即触发 point 即生效。
-- 文案：跟随 Web UI / 跟随系统 / 浅色 / 深色；图标 16×16 outline 风格（跟随 Web UI 用鲸鱼剪影，其余用太阳/月亮/半日半月亮自绘或从 webui bundle 提取同款，来源注明）。
+- 文案：按钮原文案（跟随 Web UI / 跟随系统 / 浅色 / 深色）移入 `title`（hover 提示）+ `aria-label`（读屏名称）；图标 16×16 outline 风格（跟随 Web UI 用鲸鱼剪影，其余用太阳/月亮/显示器，与 webui 同款提取，来源注明）。
 - 点击即写 `settings.theme` 并即时应用（不改变「保存」按钮语义——保存只管 port/profile/autoOpen/badge）。
 - 安全：主题值白名单校验（四态枚举），非法值落回默认。
 
@@ -831,21 +831,32 @@ popup 设置面板新增「外观」行（四个互斥选项按钮，两行 2×2
 - 错误态：红调卡片（见状态变体）。
 - Matrix 动效：已撤销（2026-08-22 用户复盘——webui 点阵语义为长时进行中，扩展 busy 是秒级过渡，不适用；busy 用琥珀脉冲，见 §8.8.1）。
 
-### 8.9 徽标提醒「该点回来看看了」（M8）
+### 8.9 徽标提醒「该点回来看看了」（M8）+ M8.1 徽标语义重构（2026-08-22 用户决策）
 
 **目标**：用户不长时间驻守 dsh 标签页（切去别的标签/窗口，或窗口最小化）。这时 dsh Web UI 里「一轮工作完成」或「会话正在等你拍板（批准 / 问答 / 计划审查）」应经**工具栏徽标**提醒用户回来——徽标是扩展已有的常驻信息面（§8.3），零新增权限、零持续后台占用（检测发生在已注入的 content script 里，SW 只在事件驱动的消息时唤醒）。
 
-**触发信号（webui 事实基线，取自 `@deepseek-ai/dsh-client-ui-workspace` 0.1.1-rc.2 客户端包与 `dsh-web-frontend` bundle）**：会话侧栏行由 `StateDot` 渲染——**工作中** = `svg[data-state="ongoing"]`（10×10 点阵追逐动画，即 §8.8.1 所述「正在工作」点阵）；**等待用户**（pendingInteraction: approval / question / plan-review）= `span[data-state="warning"]`；空闲/完成 = `data-state="done"`。这组 `data-state` 值是 StateDot 的**语义 API 属性**（非 CSS-module 哈希类名），跨 webui 版本漂移风险低。
+**M8.1 语义重构（用户决策）**：原 M8 把「实例运行状态（绿●/空白）」与「会话提醒（紫?/琥珀!）」都塞进徽标字符，两者互斥覆盖——显示「?」时看不到实例状态，且实例停止后提醒仍残留（4h TTL）。重构把两个语义层**拆分到双载体**（§8.9.1 表）：
 
-**行为规范（`extension/content/panel.js` 新增段 + `extension/background.js` 分层渲染）**：
+| 载体 | 语义层 | 表达 | 说明 |
+|---|---|---|---|
+| **图标角标**（action.setIcon 预生成 PNG 变体） | 实例状态层 | 绿点=运行中、红点=错误/未装宿主、无点=停止 | 与徽标同屏共存，不互斥覆盖 |
+| **徽标字符+色**（action badge） | 会话状态层 | 紫「?」=等你拍板、琥珀「!」=工作完成（事件提醒）、**蓝 n**=n 个会话工作中、空=安静 | 蓝 #5686fe = webui `--dsh-state-ongoing` 同源色（deepseek 蓝，用户实测「Deep diving…」状态标签同色系） |
 
-1. **检测（panel.js，只读）**：与面板共注入（同一指纹激活）。每 1s 扫描两个选择器（`svg[data-state="ongoing"]`、`[data-state="warning"]`），只判定**存在性**，不读取消息内容/文本。状态机：`idle → working →(稳定 1.2s 空态)→ done-fired`；`任意 → waiting-fired`（waiting 出现立即上报，优先级覆盖 done）。等待用户 outranks 工作进行中（用户侧语义：需要拍板 > 继续观察）。注：隐藏页定时器被 Chrome 节流至 1Hz，取 1s 周期与节流上限对齐。
-2. **触发即上报（页面隐藏时）**：仅在 `document.hidden === true`（标签不活跃或窗口最小化）时上报；`set`: `{type:'attention', op:'set', kind:'done'|'waiting'}` → SW；`kind='waiting'` → 紫「?」徽标（「等你拍板」专用色，§8.9.1）；`kind='done'` → 琥珀「!」徽标；SW 侧 `sender.tab.id` 为事实键（多个 dsh 标签页各记各的）。**页面重新可见即发 `op:'clear'`**（防「用户已在看却仍挂提醒」）。
-3. **SW 侧（background.js）**：`attentionMap`（storage.local，`{ [tabId]: {kind, at} }`）持久化——MV3 SW 可回收，徽标状态以 storage 为事实源；`tabs.onRemoved` 清理；**同标签导航离开 dsh（tab 未关闭）由 `tabs.onUpdated` 按 URL 判定清理（M8 修补 M2，content script 侧 pagehide 亦发 clear 双保险）**；`onStartup`/`onInstalled` 清空（浏览器重启/扩展更新后的旧提醒无意义，沿用占位即可）；4 小时 TTL 防僵尸键（兜底，不影响正常使用）。徽标渲染优先级：**waiting（紫「?」#8b5cf6）> done（琥珀「!」#f59e0b）> 服务态**（§8.3 绿点/空白）；文字色显式 `#ffffff`（徽标字符可见，不同于服务态「● 同底隐形」技巧）。title 同步：`dsh：正在等你（批准 / 问答 / 计划审查）——点回来看` / `dsh：有一轮工作完成——回来看看`。
-4. **设置**：`settings.attention`（默认 `true`，popup 设置面板「界面」分组新增开关「徽标提醒（回来看看）」）；**关闭后 SW 忽略 set 且清空累积条目**（`handleAttention` 的 set 分支以前置判断拒绝 + storage.onChanged 在开关变 off 瞬间清空 attentionMap），否则关闭期间的条目会在重开开关时冒出一条「凭空」提醒（H1 修补）。
+优先级：**waiting（紫?）> done（琥珀!）> working（蓝 n）**；多 tab 全局聚合（working 计数求和、waiting/done 任一即有）。字符上限「9+」（徽标字符区约 2 字符）。
+
+**独立开关**：`settings.attentionDone`（默认 true，popup「界面」分组新增「徽标：工作完成提醒（琥珀!）」）——done 事件可单独关闭；总开关 `settings.attention` 关闭则整个会话状态层停显（徽标空，角标照常）。**自定义语义（预设档位/每状态字符映射）列为后续可选项（2026-08-22 用户提及，基础功能先行）**。
+
+**触发信号（webui 事实基线，取自 `@deepseek-ai/dsh-client-ui-workspace` 0.1.1-rc.2 客户端包与 `dsh-web-frontend` bundle）**：会话侧栏行由 `StateDot` 渲染——**工作中** = `svg[data-state="ongoing"]`（基线为 10×10 点阵追逐动画；2026-08-22 用户实测当前版本渲染为**蓝色状态标签**（如「Deep diving…」，`--dsh-state-ongoing: --dsw-static-deepseek-450` #5686fe）；徽标蓝 n 与 webui 同源）；**等待用户**（pendingInteraction: approval / question / plan-review）= `span[data-state="warning"]`；空闲/完成 = `data-state="done"`。这组 `data-state` 值是 StateDot 的**语义 API 属性**（非 CSS-module 哈希类名），跨 webui 版本漂移风险低。
+
+**行为规范（`extension/content/panel.js` 检测段 + `extension/background.js` 双载体渲染）**：
+
+1. **检测（panel.js，只读）**：与面板共注入（同一指纹激活）。每 1s 扫描两个选择器（`svg[data-state="ongoing"]`、`[data-state="warning"]`），只判定**存在性并计数**（`querySelectorAll().length`），不读取消息内容/文本。状态机：`idle → working →(稳定 1.2s 空态)→ done-fired`；`任意 → waiting-fired`（waiting 出现立即上报，优先级覆盖 done）。等待用户 outranks 工作进行中（用户侧语义：需要拍板 > 继续观察）。注：隐藏页定时器被 Chrome 节流至 1Hz，取 1s 周期与节流上限对齐。
+2. **触发即上报（页面隐藏时；计数签名变化才发）**：仅在 `document.hidden === true`（标签不活跃或窗口最小化）时上报；`set`: `{type:'attention', op:'set', kind:'idle'|'working'|'waiting'|'done', counts:{working,waiting}}` → SW；**waiting:0→working:0 的计数签名（`waiting:working`）变化即上报**（蓝 n 常驻概览的数据源），`done` 为工作→空闲稳定 1.2s 的事件上报；SW 侧 `sender.tab.id` 为事实键（多个 dsh 标签页各记各的）。**页面重新可见即发 `op:'clear'`**（防「用户已在看却仍挂提醒」）。
+3. **SW 侧（background.js）**：`attentionMap`（storage.local，`{ [tabId]: {kind, working, waiting, at, port} }`）持久化——MV3 SW 可回收，徽标状态以 storage 为事实源；`tabs.onRemoved` 清理；**同标签导航离开 dsh（tab 未关闭）由 `tabs.onUpdated` 按 URL 判定清理（M8 修补 M2，content script 侧 pagehide 亦发 clear 双保险）**；`onStartup`/`onInstalled` 清空（浏览器重启/扩展更新后的旧提醒无意义，沿用占位即可）；4 小时 TTL 防僵尸键（兜底，不影响正常使用）。徽标渲染优先级：**waiting（紫「?」#8b5cf6）> done（琥珀「!」#f59e0b）> working（蓝 n #5686fe，n≥10 显示「9+」）**；文字色显式 `#ffffff`。**死提醒联动（M8.1 修补）**：refreshBadge 判定实例未运行/异常时，按条目 `port`（上报时从 tab.url 解析）清除对应端口的会话信号——此前「实例已停、紫?/琥珀! 仍挂 4h TTL」的误导场景。title 同步：等待/完成/woking 三条文案 + 服务态（角标层）title。
+4. **设置**：`settings.attention`（默认 `true`，popup 设置面板「界面」分组开关「徽标提醒（回来看看）」）——关闭后 SW 忽略 set 且清空累积条目（`handleAttention` 的 set 分支以前置判断拒绝 + storage.onChanged 在开关变 off 瞬间清空 attentionMap），否则关闭期间的条目会在重开开关时冒出一条「凭空」提醒（H1 修补；M8.1 盲审补正：清理以**本次变化的权威值**为基——单次 set 同时改 settings+attentionMap 时 onChanged 回调内 settings 分支先于 attentionMap 分支、快照条目尚未入内存，旧实现会清理扑空，且 newValue 旧快照会把已删条目恢复回内存，已加 purged 防恢复）。`settings.attentionDone`（默认 `true`，「徽标：工作完成提醒（琥珀!）」独立开关）——已上表的 done 事件单独可关，waiting/working 不受影响；关闭瞬间同样剔除既有 done 条目（H1 对称修补），期间 done 也不会被新写入（set 分支前置拒绝）。
 5. **防误报**：① 完成判定需空态稳定 1.2s（React 重渲染/点阵属性瞬时抖动被吸收）；② 工作→空闲→再工作 可再次上报（每次真实完成都提醒，cooldown 由「见到新 working 才复位」保证——done-fired 后须再观测到 working 才可能再次 done-fired）；③ sending 失败（SW 休眠/唤醒竞态）静默吞掉（storage 缓存与下游 clear 自愈）。
-6. **局限（v1 接受并记录）**：会话侧栏**完全关闭**（sidebar 宽度 0，行组件卸载）时无标记可扫，检测不可用（默认布局与窄屏 rail 均渲染行，仅完全关闭受影响）；用户仅 alt-tab 到其他应用（窗口未最小化、标签仍是活动标签）时 `document.hidden` 为 false，不触发——这是浏览器页面可见性语义，无法绕过。
-7. **安全**（§12.2 补充）：只读扫描两个语义属性（存在性判定），不读取/采集页面 DOM 内容与消息文本；上报消息只含 kind（两值枚举）；SW 只接受带 `sender.tab` 的上报（扩展自身页面无 tab，不可伪造他 tab），**并校验 `sender.tab.url` 为 dsh 回环页**（127.0.0.1/localhost，本扩展 host_permissions 恰好覆盖，无新增权限）；无新增权限与 host_permissions。
+6. **局限（v1 接受并记录）**：会话侧栏**完全关闭**（sidebar 宽度 0，行组件卸载）时无标记可扫，检测不可用（默认布局与窄屏 rail 均渲染行，仅完全关闭受影响）；用户仅 alt-tab 到其他应用（窗口未最小化、标签仍是活动标签）时 `document.hidden` 为 false，不触发——这是浏览器页面可见性语义，无法绕过；**蓝 n 仅在至少一个 dsh 页面存在且后台时可用**（无页面=无会话信息=徽标空，∈双向分层）。
+7. **安全**（§12.2 补充）：只读扫描两个语义属性（存在性/计数判定），不读取/采集页面 DOM 内容与消息文本；上报消息只含 kind（四值枚举）+ 计数值 + 端口（从 tab.url 解析）；SW 只接受带 `sender.tab` 的上报（扩展自身页面无 tab，不可伪造他 tab），**并校验 `sender.tab.url` 为 dsh 回环页**（127.0.0.1/localhost，本扩展 host_permissions 恰好覆盖，无新增权限）；无新增权限与 host_permissions。
 
 #### 8.9.1 三层颜色语义分层（避免跨载体混淆，2026-08-22 用户决策）
 
@@ -853,7 +864,8 @@ popup 设置面板新增「外观」行（四个互斥选项按钮，两行 2×2
 
 | 载体 | 层级 | 主语义载体 | 语义色表 |
 |---|---|---|---|
-| **工具栏徽标** | 行动信号层（全局聚合，任意 dsh 标签） | **字符**（● 运行 / 空 未运行 / `!` 完成待办 / `?` 等你拍板） | 绿=运行、琥珀=完成待办、**紫=等你拍板**、空=未运行 |
+| **图标角标**（setIcon 变体） | 实例状态层（服务生命周期） | **颜色**（角标点） | 绿=运行中、红=错误/未装宿主、无点=停止 |
+| **工具栏徽标** | 会话状态层（全局聚合，任意 dsh 标签） | **字符**（`?` 等你拍板 / `!` 完成待办 / `n` 工作中数 / 空 安静） | 紫=等你拍板、琥珀=完成待办、**蓝=工作中**（#5686fe webui 同源）、空=安静 |
 | **popup 状态卡圆点** | 状态展示层（服务生命周期） | **颜色** | 绿=运行/健康、蓝=外部实例、琥珀=启动停止过渡、红=错误、灰=已停止 |
 | **页面内胶囊 chip dot** | 状态展示层（**本页**托管实例） | **颜色** | 同上 + 灰=未托管/端口不匹配、红=连续失败 |
 | logs 页状态点 | 状态展示层（运行状态） | **颜色** | 绿/红/灰 |
@@ -861,7 +873,7 @@ popup 设置面板新增「外观」行（四个互斥选项按钮，两行 2×2
 **约定（防混淆的硬规则）**：
 - **红色只属于「错误」语义**（状态层）；徽标提醒层**不使用红色**——「等你拍板」用紫色 `#8b5cf6`（方案 A，2026-08-22 用户决策，原红「?」#ec1313 与状态层错误红撞色，撤回）。紫色在扩展全域专用于「等待用户动作」。
 - **琥珀**在徽标=完成待办（提醒性），在状态层=过渡态（busy）——两者互不同时出现视觉冲突：状态层琥珀仅在 popup/面板内、徽标琥珀仅在 tooltip 层；且字符（!）与圆点（无字符）天然区分。
-- 徽标是**全局聚合**（任何 dsh 标签页的提醒，可能覆盖服务态）；状态卡/胶囊是**单实例视图**——看到徽标「?」应理解为「某个 dsh 页面有状态变化」，具体实例状态请点开 popup/对应页面查看。
+- **徽标（会话层）与图标角标（实例层）双载体并存、互不覆盖**：看到徽标「?」应理解为「某个 dsh 页面有状态变化」（实例是否在跑看角标点）；实例状态卡/胶囊是**单实例视图**——具体信息请点开 popup/对应页面查看。
 
 ### 8.10 扩展面板会话状态（M9，路径 3：dsh 插件侧只读端点）
 

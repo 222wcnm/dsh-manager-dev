@@ -391,26 +391,29 @@ async function main() {
       record('徽标：SW 环境探针', true, String(probe.value));
       await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 0, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
       await evalInSw('refreshBadge()');
+      // M8.1：实例状态层 = 图标角标（绿点=运行），徽标字符只属于会话状态层 → 无会话信号时 text 空
       const badge0 = await evalInSw(`(async () => JSON.stringify({
         text: await chrome.action.getBadgeText({}),
-        bg: JSON.stringify(await chrome.action.getBadgeBackgroundColor({})),
-        fg: JSON.stringify(await chrome.action.getBadgeTextColor({})),
+        icon: lastIconState,
+        title: await chrome.action.getTitle({}),
       }))()`);
-      // M7 修补：徽标=text '●' + 绿底 + 文字色同底（隐形文字 → 纯绿色状态块；空 text 不渲染）
-      const badgeStr = String(badge0.value || '');
-      const badgeGreen = /#22c55e|22c55e|34,\s*197,\s*94/i.test(badgeStr);
-      const textOk = /"text":"●"/.test(badgeStr);
-      const fgSameAsBg = /"fg":"#22c55e"|34,\s*197,\s*94/.test(badgeStr);
-      record('徽标：port 0 经 native status 显示绿色状态块（● + 绿底 + 同色字）',
-        badgeGreen && textOk && fgSameAsBg, 'badge=' + badgeStr + (badge0.raw ? ' ' + badge0.raw : ''));
+      const badgeStr0 = String(badge0.value || '');
+      record('徽标：port 0 经 native status → 角标绿点（实例运行，徽标无会话字符）',
+        /"text":""/.test(badgeStr0) && /"icon":"ok"/.test(badgeStr0) && /运行中/.test(badgeStr0),
+        'badge=' + badgeStr0 + (badge0.raw ? ' ' + badge0.raw : ''));
       await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 59999, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
       await evalInSw('refreshBadge()');
-      const badgeNone = await evalInSw('chrome.action.getBadgeText({})');
-      record('徽标：无监听端口清空', badgeNone.value === '', 'badge=' + JSON.stringify(badgeNone.value) + (badgeNone.raw ? ' ' + badgeNone.raw : ''));
+      const badgeNone = await evalInSw(`(async () => JSON.stringify({
+        text: await chrome.action.getBadgeText({}),
+        icon: lastIconState,
+      }))()`);
+      record('徽标：无监听端口 → 角标无点 + 徽标空',
+        /"text":""/.test(String(badgeNone.value || '')) && /"icon":"default"/.test(String(badgeNone.value || '')),
+        'badge=' + String(badgeNone.value || '') + (badgeNone.raw ? ' ' + badgeNone.raw : ''));
       await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
       await evalInSw('refreshBadge()');
       const badgeDefault = await evalInSw('chrome.action.getBadgeText({})');
-      record('徽标：恢复默认端口后无异常（text=● 或空）', badgeDefault.value === '●' || badgeDefault.value === '', 'badge=' + JSON.stringify(badgeDefault.value) + (badgeDefault.raw ? ' ' + badgeDefault.raw : ''));
+      record('徽标：恢复默认端口后无异常（徽标空）', badgeDefault.value === '', 'badge=' + JSON.stringify(badgeDefault.value) + (badgeDefault.raw ? ' ' + badgeDefault.raw : ''));
 
       // ---- M8 helpers：轮询替代固定 sleep（缓解隐藏页 1Hz 节流 + SW 多跳竞态，M4）----
       const waitFor = async (fn, timeoutMs) => {
@@ -447,13 +450,14 @@ async function main() {
         returnByValue: true,
       });
 
-      // 8a) M8 徽标提醒（design §8.9）：storage attentionMap 驱动徽标分层渲染——
-      //     done → 琥珀「!」；waiting → 紫「?」（等待你拍板专用色，优先级覆盖 done；
-      //     不与状态层错误红撞色——方案 A）；文字色显式白；清空 → 恢复服务态。
+      // 8a) M8.1 徽标提醒（design §8.9/§8.9.1）：storage attentionMap 驱动徽标分层渲染——
+      //     徽标=会话状态层：done → 琥珀「!」；waiting → 紫「?」（等你拍板专用色，覆盖 done）；
+      //     working → 蓝「n」（deepseek 蓝 #5686fe，webui --dsh-state-ongoing 同源色）；
+      //     优先级 waiting > done > working；清空 → 徽标空（实例状态由图标角标表达）。
       await evalInSw(`(async () => {
         await chrome.storage.local.set({
-          settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, attention: true, theme: 'follow-webui' },
-          attentionMap: { 9861: { kind: 'done', at: Date.now() } },
+          settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, attention: true, attentionDone: true, theme: 'follow-webui' },
+          attentionMap: { 9861: { kind: 'done', working: 0, waiting: 0, at: Date.now(), port: null } },
         });
       })()`);
       const doneOk = await waitFor(async () => {
@@ -465,7 +469,7 @@ async function main() {
       record('M8：徽标提醒 done → 琥珀「!」（白字）', doneOk,
         'badge=' + String(bDone.value || '') + (bDone.raw ? ' ' + bDone.raw : ''));
       await evalInSw(`(async () => {
-        await chrome.storage.local.set({ attentionMap: { 9861: { kind: 'waiting', at: Date.now() } } });
+        await chrome.storage.local.set({ attentionMap: { 9861: { kind: 'waiting', working: 0, waiting: 1, at: Date.now(), port: null } } });
       })()`);
       const waitOk = await waitFor(async () => {
         await evalInSw('applyBadge()');
@@ -475,13 +479,68 @@ async function main() {
       const bWait = await getBadgeJson();
       record('M8：徽标提醒 waiting → 紫「?」（优先级覆盖 done，白字）', waitOk,
         'badge=' + String(bWait.value || '') + (bWait.raw ? ' ' + bWait.raw : ''));
+      // M8.1：优先级 done > working（done + 蓝2 并存 → 显示琥珀!）+ working → 蓝 n + 9+ 边界
+      await evalInSw(`(async () => {
+        await chrome.storage.local.set({ attentionMap: {
+          9861: { kind: 'done', working: 0, waiting: 0, at: Date.now(), port: null },
+          9862: { kind: 'working', working: 2, waiting: 0, at: Date.now(), port: null },
+        } });
+      })()`);
+      const mixOk = await waitFor(async () => {
+        await evalInSw('applyBadge()');
+        const j = await getBadgeJson();
+        return badgeHas(String(j.value || ''), '!', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
+      }, 5000);
+      record('M8.1：徽标优先级 done > working（done 与蓝2 并存显示琥珀!）', mixOk, '');
+      await evalInSw(`(async () => {
+        await chrome.storage.local.set({ attentionMap: { 9861: { kind: 'working', working: 2, waiting: 0, at: Date.now(), port: null } } });
+      })()`);
+      const workOk = await waitFor(async () => {
+        await evalInSw('applyBadge()');
+        const j = await getBadgeJson();
+        return badgeHas(String(j.value || ''), '2', /#5686fe|5686fe|86,\s*134,\s*254/i);
+      }, 5000);
+      const bWork = await getBadgeJson();
+      record('M8.1：徽标 working → 蓝 n（2 个会话工作中，deepseek 蓝同源）', workOk,
+        'badge=' + String(bWork.value || '') + (bWork.raw ? ' ' + bWork.raw : ''));
+      await evalInSw(`(async () => {
+        await chrome.storage.local.set({ attentionMap: { 9861: { kind: 'working', working: 12, waiting: 0, at: Date.now(), port: null } } });
+      })()`);
+      const nineOk = await waitFor(async () => {
+        await evalInSw('applyBadge()');
+        const j = await getBadgeJson();
+        return badgeHas(String(j.value || ''), '9+', /#5686fe|5686fe|86,\s*134,\s*254/i);
+      }, 5000);
+      record('M8.1：徽标工作中超 9 显示「9+」', nineOk, '');
       await evalInSw(`(async () => { await chrome.storage.local.set({ attentionMap: {} }); })()`);
       const restoreOk = await waitFor(async () => {
         await evalInSw('applyBadge()');
         const j = await evalInSw('chrome.action.getBadgeText({})');
-        return j.value === '●' || j.value === '';
+        return j.value === '';
       }, 5000);
-      record('M8：提醒清空后恢复服务态徽标（● 或空）', restoreOk, '');
+      record('M8.1：提醒清空后徽标清空（实例状态由图标角标表达）', restoreOk, '');
+      // M8.1 盲审修补（H1 对称）：attentionDone 关闭瞬间剔除既有 done 条目——
+      // 重开开关时不冒陈旧「工作完成」（done 仅在关闭后被 source 拒绝，不会被新写入）
+      await evalInSw(`(async () => {
+        await chrome.storage.local.set({
+          attentionMap: { 9861: { kind: 'done', working: 0, waiting: 0, at: Date.now(), port: null } },
+          settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, attention: true, attentionDone: false, theme: 'follow-webui' },
+        });
+      })()`);
+      const doneOffOk = await waitFor(async () => {
+        const m = await evalInSw(`(async () => {
+          const d = await chrome.storage.local.get({ attentionMap: {} });
+          const map = d.attentionMap || {};
+          return JSON.stringify({ map, hasDone: Object.keys(map).some((k) => map[k] && map[k].kind === 'done') });
+        })()`);
+        return /"hasDone":false/.test(String(m.value || ''));
+      }, 5000);
+      const doneOffInfo = await evalInSw(`(async () => JSON.stringify(await chrome.storage.local.get({ attentionMap: {} })))()`);
+      record('M8.1：attentionDone 关闭剔除 done 条目（重开不冒陈旧琥珀!）', doneOffOk,
+        'map=' + String(doneOffInfo.value || '') + (doneOffInfo.raw ? ' ' + doneOffInfo.raw : ''));
+      await evalInSw(`(async () => {
+        await chrome.storage.local.set({ settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, attention: true, attentionDone: true, theme: 'follow-webui' } });
+      })()`);
 
       // 8a-2) M8 端到端（content script → SW，真实链路）：真实 dsh 页面切后台 →
       //       注入等待标记 → 紫「?」（以 storage attentionMap 条目为链路证据）；
@@ -580,8 +639,8 @@ async function main() {
         await browserWs.send('Target.activateTarget', { targetId: tab.id });
         const clearOk2 = await waitFor(attEmpty, 6000);
         const bRestore2 = await evalInSw('chrome.action.getBadgeText({})');
-        record('M8：e2e 结束恢复（attentionMap 空 + 服务态徽标）',
-          clearOk2 && (bRestore2.value === '●' || bRestore2.value === ''),
+        record('M8：e2e 结束恢复（attentionMap 空 + 徽标清空）',
+          clearOk2 && bRestore2.value === '',
           'badge=' + JSON.stringify(bRestore2.value));
         await fetchJson('http://127.0.0.1:' + PORT + '/json/close/' + tab2.id, { method: 'PUT' }).catch(() => { /* 标签已关闭/正在关闭：非致命 */ });
       } catch (e2) {

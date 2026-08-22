@@ -31,7 +31,7 @@ const ERROR_TEXTS = {
   NATIVE_ERROR: '与宿主通信失败，请确认已安装宿主并重启浏览器',
 };
 
-const DEFAULT_SETTINGS = { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, theme: 'follow-webui', attention: true };
+const DEFAULT_SETTINGS = { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, theme: 'follow-webui', attention: true, attentionDone: true };
 
 // 操作进行中的按钮文案与阶段说明（点击反馈）
 const ACTION_LABELS = {
@@ -654,6 +654,7 @@ function renderSettingsForm() {
   $('set-autoopen').checked = !!settings.autoOpen;
   $('set-badge').value = settings.badgeInterval;
   $('set-attention').checked = settings.attention !== false; // 缺省视为开（向后兼容）
+  $('set-attention-done').checked = settings.attentionDone !== false; // M8.1：完成提醒独立开关（缺省开）
   renderThemeGrid();
 }
 
@@ -736,6 +737,7 @@ function saveSettings() {
     badgeInterval: badge,
     theme: settings ? settings.theme : DEFAULT_SETTINGS.theme, // 保留主题选择（M6）
     attention: $('set-attention').checked, // M8 徽标提醒开关（design §8.9）
+    attentionDone: $('set-attention-done').checked, // M8.1 完成提醒「琥珀!」独立开关
   };
 
   chrome.storage.local.set({ settings: next }, () => {

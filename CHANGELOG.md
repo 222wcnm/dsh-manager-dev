@@ -6,6 +6,34 @@
 ## [未发布] - M4 跨平台/跨浏览器（进行中）
 
 ### Changed
+- **M8.1 徽标语义重构（2026-08-22 用户决策，design §8.9/§8.9.1）**：原「实例运行状态」与
+  「会话提醒」挤在同一徽标字符且互斥覆盖（显示「?」看不到实例状态；实例停止后紫?/琥珀!
+  仍挂 4h TTL）。重构为**双载体分层**：① 实例状态层 → **图标角标**（setIcon 预生成变体：
+  绿点=运行中 #22c55e / 红点=错误·未装宿主 #ec1313 / 无点=停止，tool _gen-icons.js 三态
+  16/48/128）；② 徽标 → **会话状态层**（字符为主语义）：紫「?」=等你拍板、琥珀「!」=
+  工作完成（事件）、**蓝 n**=n 个会话工作中（#5686fe，与 webui `--dsh-state-ongoing`
+  同源——用户实测当前 webui 工作中为蓝色「Deep diving…」状态标签，非点阵）。
+  优先级 waiting > done > working，n≥10 显示「9+」；多 tab 全局聚合（working 求和）。
+  ③ **死提醒联动**：面板上报带 `port`（tab.url 解析），refreshBadge 判定实例未运行/异常
+  即清对应端口会话信号。④ 检测协议升级（panel.js）：扫描改**计数**（querySelectorAll
+  .length）+ 隐藏页内计数签名变化即上报（蓝 n 常驻数据源），仍只读语义属性、不读内容；
+  ⑤ `settings.attentionDone` 独立开关（popup「界面」新增「徽标：工作完成提醒（琥珀!）」），
+  done 可单独关，waiting/working 不受影响；总开关 attention 关闭则整个会话层停显
+  （徽标空、角标照常）。自定义语义（预设档位/字符映射）列为后续可选项（用户暂缓）。
+  verify-cdp 徽标段更新（角标断言 icon/title、done>working 优先级、蓝 n/9+、清空恢复），
+  **M8.1 盲审修补（子代理独立审查后修复）**：① `attentionDone` 关闭瞬间未剔除既有 done
+  条目 → 重开开关冒陈旧「工作完成」（H1 同类缺陷），补对称清理（剔除 done，idle/working/
+  waiting 不受影响）；② 顺带修复 onChanged 时序竞态——单次 set 同时改 settings+attentionMap
+  时，settings 清理分支先于 attentionMap 分支执行、快照中的条目尚未进内存导致清理扑空
+  （原始 H1 的总开关清空亦受此竞态影响）；清理改为以本次变化的权威值为基 + purged 防
+  newValue 旧快照恢复；③ 新增 1 条防回归断言，全量 **PASS 75 / FAIL 0**。
+- **外观行改 icon-only（2026-08-22 用户决策）**：popup 设置「外观」四个 theme-cube 由
+  「图标 + 文字」2×2 网格改为一行 4 列、仅图标（16×16）+ hover 原生 `title` 提示
+  （文字移入 `title`/`aria-label`，读屏语义保留）；按钮 `height: 32px; padding: 0`，
+  选中态/点选即生效/roving tabindex 键盘导航不变，省约 40px 垂直空间。
+  为有意偏离 webui AppearanceRow 原文案版，design §8.7.5 已同步（含偏离注记）；
+  verify-cdp 外观行 2 条断言基于 `data-theme`/`tabindex`/类名，不依赖文字节点，
+  预期不受影响（截图存档待重拍）。
 - **popup 启动按钮 UX 与状态对齐（2026-08-22）**：① `error` 态保留「启动」重试入口
   （此前错误面板引导换端口/装 dsh 后主按钮反而被禁用，需等轮询恢复）；明细行 error
   文案追加「修复后点击启动重试」；② 忙碌态视觉对齐状态：无 pending 的

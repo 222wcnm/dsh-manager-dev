@@ -2,6 +2,9 @@
 // ============================================================================
 // _gen-icons.js — 用 headless Chrome + CDP 把鲸鱼 logo（tools/icons/whale.svg）
 // 渲染为扩展图标 icons/{16,48,128}.png（透明背景、4x 超采样后盒式降采样）。
+// 角标变体（M8.1 图标角标，实例状态层）：icons/{ok,error}-{16,48,128}.png —
+// 右上角 44% 白描边圆点（绿=运行 #22c55e / 红=错误 #ec1313），与徽标
+// 会话状态层（字符）天然双载体共存，不互斥覆盖（design §8.9.1）。
 //
 // 来源：popup.html 内联 brand-logo 的鲸鱼路径（path 10，与 Web UI 侧栏 logo 同源），
 // 颜色 = --dsw-alias-label-primary = #0F1115。
@@ -38,13 +41,28 @@ const PAGE_TPL = `<!DOCTYPE html>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
   .bg { position: absolute; inset: 0; background: #0F1115; border-radius: 22%; }
   svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+  .dotring { position: absolute; right: 5%; top: 5%; width: 44%; height: 44%; border-radius: 50%;
+    background: #FFFFFF; display: flex; align-items: center; justify-content: center; }
+  .dotcore { width: 66%; height: 66%; border-radius: 50%; background: {{DOTCOLOR}}; }
 </style>
 </head>
 <body>
 <div class="bg"></div>
 {{WHALE}}
+{{DOT}}
 </body>
 </html>`;
+
+// 角标变体：白描边圆点右上角叠加（16px 显示时约 7px 圆 + 4.5px 色芯，通知点惯例比例）
+const ICON_VARIANTS = [
+  { prefix: '', color: '' },              // 基础（无点）= 默认/停止
+  { prefix: 'ok-', color: '#22c55e' },    // 运行中 = 绿点
+  { prefix: 'error-', color: '#ec1313' }, // 错误 = 红点（全域红色只属于错误语义，§8.9.1）
+];
+
+function dotHtml(color) {
+  return color ? `<div class="dotring"><div class="dotcore" style="background:${color}"></div></div>` : '';
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -158,9 +176,6 @@ async function main() {
   const whale = fs.readFileSync(path.join(ROOT, 'tools', 'icons', 'whale.svg'), 'utf8')
     .trim()
     .replace('fill="#0F1115"', 'fill="#FFFFFF"');
-  const pageHtml = PAGE_TPL.replace('{{WHALE}}', whale);
-  const srcHtml = path.join(os.tmpdir(), 'dsh-manager-icon-source.html');
-  fs.writeFileSync(srcHtml, pageHtml, 'utf8');
 
   const outDir = path.join(ROOT, 'extension', 'icons');
   fs.mkdirSync(outDir, { recursive: true });
@@ -175,30 +190,40 @@ async function main() {
 
   try {
     await waitCdp();
-    const page = await openPage('file:///' + srcHtml.replace(/\\/g, '/'));
+    const page = await openPage('about:blank');
     await sleep(600);
 
-    for (const size of SIZE) {
-      // 视口 = 目标尺寸（CSS px），deviceScaleFactor=4 → 截图 4x 像素
-      await page.send('Emulation.setDeviceMetricsOverride', {
-        width: size, height: size, deviceScaleFactor: SS, mobile: false,
-        screenWidth: size, screenHeight: size,
-      });
-      // 透明背景（alpha=0），Page.captureScreenshot 输出透明 PNG
-      await page.send('Emulation.setDefaultBackgroundColorOverride', {
-        color: { r: 0, g: 0, b: 0, a: 0 },
-      });
-      await sleep(250);
-      const shot = await page.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
-      if (!shot || !shot.result || !shot.result.data) throw new Error('截图失败 size=' + size);
-      const big = Buffer.from(shot.result.data, 'base64'); // (size*SS)^2 RGBA
-      // 截图为 PNG 编码，解码为 RGBA：直接用 4x 超采样像素
-      const rgba = decodePngRgba(big, size * SS, size * SS);
-      const small = downscale4(rgba, size * SS, size * SS);
-      const png = encodePng(small, size, size);
-      const dest = path.join(outDir, size + '.png');
-      fs.writeFileSync(dest, png);
-      console.log('wrote ' + dest + ' (' + png.length + 'B, ' + size + 'x' + size + ')');
+    for (const variant of ICON_VARIANTS) {
+      const pageVariant = PAGE_TPL
+        .replace('{{WHALE}}', whale)
+        .replace('{{DOT}}', dotHtml(variant.color))
+        .replace('{{DOTCOLOR}}', variant.color || '#22c55e');
+      const srcHtml = path.join(os.tmpdir(), 'dsh-manager-icon-source.html');
+      fs.writeFileSync(srcHtml, pageVariant, 'utf8');
+      await page.send('Page.navigate', { url: 'file:///' + srcHtml.replace(/\\/g, '/') });
+      await sleep(600);
+      for (const size of SIZE) {
+        // 视口 = 目标尺寸（CSS px），deviceScaleFactor=4 → 截图 4x 像素
+        await page.send('Emulation.setDeviceMetricsOverride', {
+          width: size, height: size, deviceScaleFactor: SS, mobile: false,
+          screenWidth: size, screenHeight: size,
+        });
+        // 透明背景（alpha=0），Page.captureScreenshot 输出透明 PNG
+        await page.send('Emulation.setDefaultBackgroundColorOverride', {
+          color: { r: 0, g: 0, b: 0, a: 0 },
+        });
+        await sleep(250);
+        const shot = await page.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        if (!shot || !shot.result || !shot.result.data) throw new Error('截图失败 size=' + size);
+        const big = Buffer.from(shot.result.data, 'base64'); // (size*SS)^2 RGBA
+        // 截图为 PNG 编码，解码为 RGBA：直接用 4x 超采样像素
+        const rgba = decodePngRgba(big, size * SS, size * SS);
+        const small = downscale4(rgba, size * SS, size * SS);
+        const png = encodePng(small, size, size);
+        const dest = path.join(outDir, variant.prefix + size + '.png');
+        fs.writeFileSync(dest, png);
+        console.log('wrote ' + dest + ' (' + png.length + 'B, ' + size + 'x' + size + ')');
+      }
     }
   } finally {
     try { chrome.kill(); } catch (_) { /* 忽略 */ }

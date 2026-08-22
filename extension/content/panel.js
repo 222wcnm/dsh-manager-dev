@@ -22,8 +22,9 @@
 //   - 扩展重载/更新后旧脚本上下文失效（chrome.runtime.id 为空）→ 停止轮询并
 //     提示刷新页面，避免孤儿脚本永久误报红错；
 //   - 展开面板绝对定位在胶囊上方：胶囊位置不动，面板向上弹出；
-//   - M8 徽标提醒（§8.9）：只读扫描会话状态标记（data-state 语义属性），页面
-//     后台时 工作完成/等待用户 → 经 SW 上报表栏「!」/「?」提醒；可见即清除。
+//   - M8/M8.1 徽标提醒（§8.9）：只读扫描会话状态标记（data-state 语义属性），页面
+//     后台时 工作完成/等待用户 → 经 SW 上报表栏「!」/「?」提醒；并上报工作中/等待
+//     计数（蓝 n 会话状态概览）；可见即清除。
 // ============================================================================
 (() => {
   // ---- 指纹激活：仅 dsh Web UI 页面 ----
@@ -512,33 +513,38 @@
     attributeFilter: ['data-ds-dark-theme'],
   });
 
-  // ---- 徽标提醒「该点回来看看了」（design §8.9，M8）----
+  // ---- 徽标提醒「该点回来看看了」（design §8.9，M8；M8.1 徽标=会话状态层）----
   // 只读扫描 webui 会话状态标记（事实基线：StateDot 的 data-state 语义属性——
-  // 工作中 = svg[data-state="ongoing"] 点阵；等待用户 = [data-state="warning"]；
-  // 空闲/完成 = data-state="done"），页面隐藏时跟踪两个转换：
-  //   工作 → 空闲（稳定 1.2s）→ 'done'（琥珀「!」徽标）；
-  //   出现等待用户 → 'waiting'（红「?」徽标，优先级覆盖 done）。
-  // 页面重新可见即发 clear。只判定标记存在性，不读取页面消息内容。
+  // 工作中 = svg[data-state="ongoing"]（webui 渲染为蓝色状态标签，deepseek 蓝系）；
+  // 等待用户 = [data-state="warning"]；空闲/完成 = data-state="done"），
+  // 页面隐藏时跟踪状态快照并上报**计数**（蓝 n = n 个会话工作中）：
+  //   waiting>0 → 'waiting'（紫「?」，优先级覆盖 done/working）；
+  //   working>0 → 'working'（蓝 n 常驻状态概览）；
+  //   工作 → 空闲（稳定 1.2s）→ 'done'（琥珀「!」事件提醒）；
+  //   空闲 → 'idle'（该 tab 无会话信号）。
+  // 页面重新可见即发 clear。只判定标记存在性与数量，不读取页面消息内容。
   const ATTENTION_TICK_MS = 1000; // 隐藏页定时器被 Chrome 节流到 1Hz，取 1s 与节流上限对齐
   const ATTENTION_DEBOUNCE_MS = 1200; // 工作→空闲需稳定空态 1.2s（吸收 React 重渲染瞬时抖动）
   let attPhase = 'idle'; // idle | working | waiting-fired | done-fired
   let attIdleSince = 0;
   let attActive = false; // 已向 SW 上报过（重新可见时需要 clear）
+  let attLastSig = '';   // 最近上报过的 waiting:working 计数签名（变化才上报）
   let attTimer = null;
 
   function attSnapshot() {
-    let working = false;
-    let waiting = false;
+    let working = 0;
+    let waiting = 0;
     try {
-      working = !!document.querySelector('svg[data-state="ongoing"]');
-      waiting = !!document.querySelector('[data-state="warning"]');
+      working = document.querySelectorAll('svg[data-state="ongoing"]').length;
+      waiting = document.querySelectorAll('[data-state="warning"]').length;
     } catch (_) { /* 页面卸载中：按无标记处理 */ }
     return { working, waiting };
   }
 
-  function attSend(op, kind) {
+  function attSend(op, kind, s) {
     if (!contextAlive()) { attStop(); return; }
-    chrome.runtime.sendMessage({ type: 'attention', op, kind }).catch(() => { /* SW 休眠/唤醒竞态：静默，storage 引理自愈 */ });
+    const counts = { working: s ? s.working : 0, waiting: s ? s.waiting : 0 };
+    chrome.runtime.sendMessage({ type: 'attention', op, kind, counts }).catch(() => { /* SW 休眠/唤醒竞态：静默，storage 引理自愈 */ });
   }
 
   function attTick() {
@@ -549,30 +555,46 @@
       if (attActive) { attActive = false; attSend('clear'); }
       attPhase = 'idle';
       attIdleSince = 0;
+      attLastSig = '';
       return;
     }
     const now = Date.now();
-    if (s.waiting) {
-      // 等待用户：立即上报（等待 > 进行中 > 完成）
+    const sig = s.waiting + ':' + s.working;
+    if (s.waiting > 0) {
+      // 等待用户：立即上报（等待 > 进行中 > 完成）；计数变化（其他会话工作变化）也更新
       attIdleSince = 0;
-      if (attPhase !== 'waiting-fired') {
-        attPhase = 'waiting-fired';
+      if (attPhase !== 'waiting-fired') attPhase = 'waiting-fired';
+      if (sig !== attLastSig) {
+        attLastSig = sig;
         attActive = true;
-        attSend('set', 'waiting');
+        attSend('set', 'waiting', s);
       }
-    } else if (s.working) {
+    } else if (s.working > 0) {
+      // 工作中：计数变化即上报（蓝 n 常驻概览）
       attIdleSince = 0;
-      if (attPhase !== 'working') attPhase = 'working';
+      attPhase = 'working';
+      if (sig !== attLastSig) {
+        attLastSig = sig;
+        attActive = true;
+        attSend('set', 'working', s);
+      }
     } else if (attPhase === 'working') {
       // 工作 → 空闲：稳定 ATTENTION_DEBOUNCE_MS 后上报「回来看看」
       if (attIdleSince === 0) attIdleSince = now;
       else if (now - attIdleSince >= ATTENTION_DEBOUNCE_MS) {
         attPhase = 'done-fired';
+        attLastSig = sig;
         attActive = true;
-        attSend('set', 'done');
+        attSend('set', 'done', s);
       }
     } else if (attPhase !== 'done-fired') {
+      // 一直空闲（无事件）：首次/计数变化时上报 idle（清空该 tab 的会话信号）
       attIdleSince = 0;
+      if (sig !== attLastSig) {
+        attLastSig = sig;
+        attActive = true;
+        attSend('set', 'idle', s);
+      }
     }
   }
 
