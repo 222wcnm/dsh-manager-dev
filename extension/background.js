@@ -23,6 +23,8 @@ const DEFAULT_SETTINGS = {
   profile: 'web',
   autoOpen: true,
   badgeInterval: 30, // 秒；chrome.alarms 最小周期 0.5 分钟（30s）
+  attention: true,   // M8：徽标提醒「该点回来看看了」（design §8.9）
+  theme: 'follow-webui', // M6：与 popup.js 默认值保持一致（防 onInstalled 合并丢弃主题）
 };
 const PROBE_TIMEOUT_MS = 1500; // 探活超时
 const NATIVE_TIMEOUT_MS = 30000; // 等待宿主响应兜底超时（默认）
@@ -33,6 +35,25 @@ const ACTION_TIMEOUT_MS = {
   start: 60000,
   stop: 45000,
   adopt: 45000,
+};
+
+// ---------------------------------------------------------------------------
+// M8 徽标提醒「该点回来看看了」（design §8.9）
+// ---------------------------------------------------------------------------
+// content script（panel.js）在 dsh Web UI 页面后台时监视会话状态标记：
+//   - 一轮工作完成（点阵消失）→ kind:'done' → 琥珀「!」；
+//   - 出现等待用户（批准/问答/计划审查）→ kind:'waiting' → 红「?」。
+// 页面重新可见时发 clear。SW 侧持久化在 storage（attentionMap），
+// 徽标渲染分优先级：waiting > done > 服务态（§8.3）。
+// 安全：只接受带 sender.tab 的上报（扩展自身页面无 tab，不可伪造他 tab）；
+// 只存 tabId + kind + 时间戳，不存任何页面内容。
+const ATTENTION_STORE_KEY = 'attentionMap';
+const ATTENTION_TTL_MS = 4 * 3600 * 1000; // 4h 兜底防僵尸键（正常由 clear/onRemoved/onStartup 清理）
+const ATTENTION_BADGES = {
+  // 色语义分层（design §8.9.1）：徽标=行动信号层——字符为主语义；
+  // 「?」用「等你拍板」专用紫（不与状态层错误红 #ec1313 撞色）、「!」用琥珀（完成待办）
+  waiting: { text: '?', bg: '#8b5cf6', fg: '#ffffff', title: 'dsh：正在等你（批准 / 问答 / 计划审查）——点回来看' },
+  done: { text: '!', bg: '#f59e0b', fg: '#ffffff', title: 'dsh：有一轮工作完成——回来看看' },
 };
 
 // ---------------------------------------------------------------------------
@@ -75,6 +96,73 @@ function hostNotInstalled() {
       message: '未安装宿主，请运行 native-host 目录下的 install.ps1 后重启浏览器',
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// M8 徽标提醒状态（storage 为事实源；以下为镜像缓存，onChanged 保持同步）
+// ---------------------------------------------------------------------------
+
+let attentionCache = {};   // { [tabId]: {kind:'done'|'waiting', at} }
+let lastStateBadge = null; // 最近一次服务态徽标（attention 存在时暂存）；SW 重启后由 refreshBadge 补
+let cachedSettings = Object.assign({}, DEFAULT_SETTINGS);
+
+// 启动/唤醒时载入提醒镜像（完成后立即按当前状态渲染一次徽标）
+function loadAttentionOnce() {
+  chrome.storage.local.get({ [ATTENTION_STORE_KEY]: {} }, (d) => {
+    attentionCache = (d && d[ATTENTION_STORE_KEY]) || {};
+    applyBadge();
+  });
+}
+
+// 修剪：只保留两值枚举 kind 与 TTL 内的条目（防僵尸键/脏数据）
+function pruneAttention(map) {
+  const out = {};
+  const now = Date.now();
+  for (const key of Object.keys(map || {})) {
+    const e = map[key];
+    if (!e || (e.kind !== 'done' && e.kind !== 'waiting')) continue;
+    if (!Number.isFinite(e.at) || now - e.at > ATTENTION_TTL_MS) continue;
+    out[key] = { kind: e.kind, at: e.at };
+  }
+  return out;
+}
+
+// 优先级：waiting > done；同类取最新
+function pickAttention() {
+  let waiting = null;
+  let done = null;
+  for (const key of Object.keys(attentionCache)) {
+    const e = attentionCache[key];
+    if (!e) continue;
+    if (e.kind === 'waiting' && (!waiting || e.at > waiting.at)) waiting = e;
+    else if (e.kind === 'done' && (!done || e.at > done.at)) done = e;
+  }
+  return waiting || done;
+}
+
+// content script 上报：仅 sender.tab 存在且为 dsh 回环页时接受（页面来源），
+// 键 = 真实 tabId；attention 关闭时忽略 set（design §8.9 item 4「关闭后忽略 set」）
+async function handleAttention(msg, sender) {
+  const tabId = sender && sender.tab && Number.isInteger(sender.tab.id) ? sender.tab.id : null;
+  if (!tabId) return;
+  // L3 加固：只接受 dsh 页面（127.0.0.1/localhost 回环）来源——扩展/其他页面的 content
+  // script 无法伪造（其 tab.url 不在本扩展 host_permissions 内时不填充，同样被拒）
+  const tabUrl = sender.tab.url;
+  if (typeof tabUrl !== 'string' || !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(tabUrl)) return;
+  if (msg.op === 'clear') {
+    if (!attentionCache[tabId]) return;
+    delete attentionCache[tabId];
+  } else if (msg.op === 'set') {
+    if (cachedSettings.attention === false) return; // 关闭：忽略上报，不写 storage
+    attentionCache[tabId] = { kind: msg.kind === 'waiting' ? 'waiting' : 'done', at: Date.now() };
+  } else {
+    return;
+  }
+  attentionCache = pruneAttention(attentionCache);
+  try {
+    await chrome.storage.local.set({ [ATTENTION_STORE_KEY]: attentionCache });
+  } catch (_) { /* SW 生命周期竞态：缓存仍正确，下次 onChanged 收敛 */ }
+  applyBadge();
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +263,7 @@ function runNativeCall(id, action, payload, timeoutMs) {
 // 消息路由（popup -> SW）
 // ---------------------------------------------------------------------------
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg !== 'object') return false;
 
   if (msg.type === 'native') {
@@ -197,43 +285,82 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true; // 异步应答
   }
 
+  // M8 徽标提醒：content script 上报（页面后台时 工作完成/等待用户）
+  if (msg.type === 'attention') {
+    handleAttention(msg, sender); // 无需应答；失败静默（panel.js 侧不 await 结果）
+    return false;
+  }
+
   return false;
 });
 
 // ---------------------------------------------------------------------------
-// 徽标刷新（chrome.alarms）
+// 徽标（chrome.alarms 刷新 + M8 提醒分层）
 // ---------------------------------------------------------------------------
 
+// 服务态徽标。M7 修补（2026-08-22 修订）：Chrome 徽标 text 为空时**整体不渲染**
+// （曾误以为「无文字+绿底 = 纯色块」，实机重载后徽标不可见）——改为 text:'●' +
+// 绿底 + **文字颜色与底色同色**（隐形文字，视觉纯绿色状态块；此前未设文字色，
+// Chrome 自动对比色造成「绿底黑/深色字」混乱）。
+const STATE_BADGE_RUNNING = {
+  text: '●',
+  bg: '#22c55e',
+  fg: '#22c55e',
+  title: 'dsh web 运行中',
+};
+const STATE_BADGE_DOWN = {
+  text: '',
+  bg: '#22c55e',
+  fg: '#22c55e',
+  title: 'dsh web 未运行',
+};
+
+// 刷新服务态徽标（alarm 驱动/启动时；探测不惊动宿主，见 §8.3）
 async function refreshBadge() {
   const s = await getSettings();
-  // M4：port 0（动态端口）是合法设置值——不能用 `|| 3080` 兜底（会把 0 吞掉、
-  // 徽标错误地探测 3080）；仅对非法值（NaN/负/非数）回退默认
+  cachedSettings = Object.assign({}, DEFAULT_SETTINGS, s);
+  // M4：port 0（动态端口）无法本地探活——经 native status 判定（宿主解析日志/记录中的实际端口）
   const rawPort = Number(s.port);
   const port = Number.isFinite(rawPort) && rawPort >= 0 ? rawPort : DEFAULT_SETTINGS.port;
-  // M4：port 0（动态端口）无法本地探活——经 native status 判定（宿主解析日志/记录中的实际端口）
+  let stateBadge = STATE_BADGE_DOWN;
   if (port === 0) {
     const resp = await enqueueNativeCall('bg-badge-' + Date.now().toString(36), 'status', {});
     const running = !!(resp && resp.ok && resp.result
       && (resp.result.state === 'running' || resp.result.state === 'external'));
     if (running) {
       const p = resp.result.port;
-      chrome.action.setBadgeText({ text: '●' });
-      chrome.action.setBadgeBackgroundColor({ color: '#22c55e' });
-      chrome.action.setTitle({ title: 'dsh web 运行中' + (p ? ' (端口 ' + p + ')' : '') });
-    } else {
-      chrome.action.setBadgeText({ text: '' });
-      chrome.action.setTitle({ title: 'dsh web 未运行' });
+      stateBadge = { text: STATE_BADGE_RUNNING.text, bg: STATE_BADGE_RUNNING.bg, fg: STATE_BADGE_RUNNING.fg, title: STATE_BADGE_RUNNING.title + (p ? ' (端口 ' + p + ')' : '') };
     }
-    return;
-  }
-  const { up } = await probePort(port);
-  if (up) {
-    chrome.action.setBadgeText({ text: '●' });
-    chrome.action.setBadgeBackgroundColor({ color: '#22c55e' });
-    chrome.action.setTitle({ title: 'dsh web 运行中 (端口 ' + port + ')' });
   } else {
-    chrome.action.setBadgeText({ text: '' });
-    chrome.action.setTitle({ title: 'dsh web 未运行' });
+    const { up } = await probePort(port);
+    if (up) {
+      stateBadge = { text: STATE_BADGE_RUNNING.text, bg: STATE_BADGE_RUNNING.bg, fg: STATE_BADGE_RUNNING.fg, title: STATE_BADGE_RUNNING.title + ' (端口 ' + port + ')' };
+    }
+  }
+  lastStateBadge = stateBadge;
+  applyBadge();
+}
+
+// 徽标最终渲染：提醒（waiting > done）优先于服务态；服务态快照缺失时补算
+function applyBadge() {
+  if (cachedSettings.attention !== false) {
+    const e = pickAttention();
+    if (e) {
+      const b = ATTENTION_BADGES[e.kind] || ATTENTION_BADGES.done;
+      chrome.action.setBadgeText({ text: b.text });
+      chrome.action.setBadgeBackgroundColor({ color: b.bg });
+      chrome.action.setBadgeTextColor({ color: b.fg });
+      chrome.action.setTitle({ title: b.title });
+      return;
+    }
+  }
+  if (lastStateBadge) {
+    chrome.action.setBadgeText({ text: lastStateBadge.text });
+    chrome.action.setBadgeBackgroundColor({ color: lastStateBadge.bg });
+    chrome.action.setBadgeTextColor({ color: lastStateBadge.fg });
+    chrome.action.setTitle({ title: lastStateBadge.title });
+  } else {
+    refreshBadge(); // 服务态快照尚无（SW 刚醒/提醒先到）：补算一次
   }
 }
 
@@ -249,9 +376,24 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm && alarm.name === 'badge') refreshBadge();
 });
 
-// 设置变更（popup 保存）后立即重建徽标周期
+// 设置变更（popup 保存）后立即重建徽标周期；提醒/设置变动同步镜像缓存并重渲染徽标
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.settings) ensureBadgeAlarm();
+  if (area !== 'local') return;
+  if (changes.settings) {
+    const wasOn = cachedSettings.attention !== false;
+    cachedSettings = Object.assign({}, DEFAULT_SETTINGS, changes.settings.newValue || {});
+    // H1：关闭的瞬间清空已累积条目——重开时以当前页面实时状态为准，不冒陈旧提醒
+    if (wasOn && cachedSettings.attention === false && Object.keys(attentionCache).length) {
+      attentionCache = {};
+      chrome.storage.local.set({ [ATTENTION_STORE_KEY]: {} });
+    }
+    ensureBadgeAlarm();
+    applyBadge();
+  }
+  if (changes[ATTENTION_STORE_KEY]) {
+    attentionCache = changes[ATTENTION_STORE_KEY].newValue || {};
+    applyBadge();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -264,14 +406,39 @@ chrome.runtime.onInstalled.addListener(() => {
     const merged = Object.assign({}, DEFAULT_SETTINGS, (data && data.settings) || {});
     chrome.storage.local.set({ settings: merged });
   });
+  // M8：扩展重载/更新后旧 content script 成为孤儿（无法再发 clear），清空旧提醒
+  attentionCache = {};
+  chrome.storage.local.set({ [ATTENTION_STORE_KEY]: {} });
   ensureBadgeAlarm();
   refreshBadge();
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  // M8：浏览器重启后的旧提醒无意义（标签恢复后 content script 会按新状态重新判定）
+  attentionCache = {};
+  chrome.storage.local.set({ [ATTENTION_STORE_KEY]: {} });
   ensureBadgeAlarm();
   refreshBadge();
 });
 
+// M8：dsh 标签页被关闭 → 其提醒条目随之删除；同标签导航离开 dsh（tab 未关闭，
+// content script 已随页面卸载）→ 由 SW 按 URL 兜底清理（M2 反残留）
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (!attentionCache[tabId]) return;
+  delete attentionCache[tabId];
+  chrome.storage.local.set({ [ATTENTION_STORE_KEY]: attentionCache });
+  applyBadge();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!changeInfo.url) return; // 仅 URL 变化时判定（标题/图标等变化与归属无关）
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(changeInfo.url)) return; // 仍在 dsh 回环页
+  if (!attentionCache[tabId]) return;
+  delete attentionCache[tabId];
+  chrome.storage.local.set({ [ATTENTION_STORE_KEY]: attentionCache });
+  applyBadge();
+});
+
 // SW 被唤醒（如用户重新加载扩展）时立即刷新一次徽标
+loadAttentionOnce(); // M8：先载入提醒镜像（回调内 applyBadge），再补服务态
 refreshBadge();

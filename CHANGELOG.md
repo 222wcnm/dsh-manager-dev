@@ -5,6 +5,40 @@
 
 ## [未发布] - M4 跨平台/跨浏览器（进行中）
 
+### Changed
+- **popup 启动按钮 UX 与状态对齐（2026-08-22）**：① `error` 态保留「启动」重试入口
+  （此前错误面板引导换端口/装 dsh 后主按钮反而被禁用，需等轮询恢复）；明细行 error
+  文案追加「修复后点击启动重试」；② 忙碌态视觉对齐状态：无 pending 的
+  `starting`/`stopping`（他处发起/宿主回填前）对应按钮显示 spinner + 「…中」文案，
+  与圆点琥珀脉冲一致（此前只变文案无转圈）；③ pending 只有被点按钮转圈，其余按钮
+  回到 idle 文案（此前点重启时「停止」也显示「停止中…」却无 spinner）；④ 忙碌中的
+  按钮不被 `disabled` 灰化（`.btn.is-pending:disabled` / `.icon-btn.is-pending:disabled`
+  `opacity:1`），spinner 全程全亮；design §8.2 行为规范新增第 12 条按钮状态矩阵。
+
+### Fixed
+- **M6 盲审修复（2026-08-22 独立审查后）**：① 浅色主题 `.theme-cube.selected`
+  选中背景改用 `--dsw-alias-bg-module-platform` 但浅色 `:root` 未定义该变量 → 浅色下
+  选中态无背景（回退 transparent），`:root` 补浅色定义（bluish-60，webui 同值）；
+  ② 面板 `syncThemeMirror` 未复用既有 `contextAlive()` 模式——扩展重载后孤儿脚本的
+  MutationObserver 会访问失效上下文，补前置检查 + 失效即 `disconnect()`；
+  ③ 外观行补 radiogroup 规范键盘语义（roving tabindex + Arrow/Home/End 换选，换选即生效）；
+  ④ popup/logs `:root` 定义 `--dsw-shadow-lv1/2`（此前仅 var() 调用无定义，恒走 fallback，
+  中央化意图落空）；verify-cdp 新增 2 条防回归断言（浅色选中态背景渲染、
+  键盘导航），全量 **PASS 50 / FAIL 0**。design §8.7.2/§8.7.4/§8.7.5 同步修订
+  （镜像保留语义、面板「换肤零逻辑」措辞、外观行实际数值 + ARIA 规范）。
+- **popup 操作竞态：`Cannot set properties of null (setting 'ack')`（2026-08-22 实机报错
+  修复）**——点「重启」等操作后偶发崩溃：① init 首查/手动刷新/保存设置发起的 status
+  请求在**操作发起前**在途，其应答（操作前快照，如 `stopped`——M5.5 时序下新进程端口
+  就绪前无 run 记录正报 stopped）晚于操作应答返回时，被 `applyStatus` 的
+  `finishPending(null,null)` 静默收敛清空 `pending`；② 宿主 start/restart 应答返回后
+  `pending.ack=false` 写在 null 上 → TypeError。修复三层：status/manual 应答若快照
+  早于操作发起（`pending.atMs > reqAt`）直接丢弃；`applyStatus` 终态判定仅在操作已应答
+  （ack=false）后执行，且 `stopped` 对 start/restart 视为合法中间态、保留 pending 等
+  starting/running；`doAction` 应答处理前加 null 防御（极端竞态下弃用本次应答，状态由
+  2s 轮询自愈，不再抛错）。逻辑回归 78/78（按钮矩阵 + 7 个竞态场景：旧快照不误清/
+  收敛期 stopped 保留/ack 前不误完成/stop 正常完成/starting 收敛链/null 防御）。
+  design §8.2 行为规范新增第 13 条。
+
 ### Removed
 - **「显示 dsh 控制台窗口」设置项与协议字段 `windowsHide` 已移除**（2026-08-15 实测核验）：
   Node `detached:true` 在 Windows 下由 libuv 无条件加 `DETACHED_PROCESS`（子进程既不继承
@@ -14,6 +48,105 @@
   §6.3 第 5 步同步修订；原 smoke 场景 27 与相关断言移除（场景 27 号复用于 M5.5 载体链路测试）。
 
 ### Added
+- **M8 徽标提醒「该点回来看看了」（design §8.9，2026-08-22）**：解决「用户不长时间驻守
+  dsh 标签」——内容脚本只读扫描 webui 会话状态的**语义标记**（`svg[data-state="ongoing"]`
+  工作中点阵 / `[data-state="warning"]` 等待用户，取自 StateDot data-state 契约，非 CSS
+  哈希类名），页面隐藏（`document.hidden`）时跟踪「工作→空闲（稳定 1.2s）」与「等待出现」，
+  经 SW（`attentionMap` storage 持久化，`sender.tab.id` 为事实键，`tabs.onRemoved`/
+  启动清理 + 4h TTL 兜底）分层渲染徽标：一轮完成 → 琥珀「!」（#f59e0b）；等待拍板
+  （批准/问答/计划审查）→ **紫「?」（#8b5cf6，方案 A：原红「?」与状态层错误红撞色，
+  2026-08-22 用户决策——红色全域只留给错误，紫=「等你拍板」专用色；§8.9.1 三层语义
+  分层表）**，优先级覆盖完成；页面切回可见/标签关闭即自动清除、恢复服务态绿点/空白。
+  popup 设置「界面」分组新增「徽标提醒（回来看看）」开关（默认开；关闭后 SW 忽略上报
+  并清空累积条目）。verify-cdp 新增 8 条 M8 记录（7 断言 + 1 e2e 异常兜底记录：
+  SW 分层 done→「!」/ waiting→「?」且覆盖/清空恢复 + e2e 前置隐藏断言/等待标记→「?」/
+  切回自动清除/工作→完成 done 链路（基线存在真实工作中会话时如实记录）/结束恢复），
+  全量 **PASS 71 / FAIL 0**（2026-08-22 实跑）。
+  **M8 修补（2026-08-22，子代理盲审后修订）**：① H1 关闭时忽略 set（`handleAttention`
+  set 分支前置判断 + 开关变 off 瞬间清空 attentionMap，防重开开关冒陈旧提醒）；② M2
+  同标签导航离开 dsh 清残留（panel `pagehide` clear + SW `tabs.onUpdated` URL 判定兜底）；
+  ③ M1 补 done 路径真实链路 e2e（注入 `svg[data-state=ongoing]`→移除→「!」，以 storage
+  attentionMap 条目为链路证据）；④ L3 `sender.tab.url` 回环白名单；⑤ L4 background
+  DEFAULT_SETTINGS 补 `theme`（防 onInstalled 合并丢弃）；⑥ L2 fg 白字断言；e2e 轮询
+  替代固定 sleep。
+- **M7 popup 排版优化（方案 A：应用栏 + 状态卡 + 分组设置，design §8.8，2026-08-22）**：
+  解决 §8.2 现行排版「平铺朴实感」——信息无分区、重量均等、按钮不突出。① **三区结构**：
+  应用栏（20px 鲸鱼 + 「DSH Manager」15/600 + 「dsh web」胶囊标签 + 右侧 28px 圆形刷新/设置）、
+  状态卡（焦点区：`bg-module-platform` 底 + border-l1 + 圆角 12；左状态词 13/500 + 右端口 12/500
+  业务蓝 + 次级行 11.5px caption tabular-nums）、操作区（主操作 h32 primary/danger/outline +
+  「打开 Web UI」全宽 ghost）、底栏（border-top-l1 + 11px 提示 + 「查看日志」link）。全部走
+  `--dsw-*` 令牌，零新增硬编码色；深色随 §8.7 令牌自动适配。② **状态变体**：running 绿点常规 /
+  stopped 灰点 label-secondary / external 蓝点端口 / starting·stopping 琥珀 warn + **Matrix 点阵动效** /
+  error **红调卡**（border rgba(236,19,19,.25) + 状态词 error 红，错误详情仍走既有 error 面板）；
+  「端口 0 自动分配」等次级行文案迁移进卡片。③ **§8.8.1 Matrix 动效**（webui 会话侧栏「正在工作」
+  点阵原样复刻）：SVG 10×10 viewBox 3×3 外圈 8 个 2×2 rect、`shape-rendering=crispEdges`、
+  `fill=currentColor`、`animation-delay -1000ms…-125ms`（125ms 步进）；
+  `@keyframes dot-chase` 关键帧逐字（0%,12.4%→1 / 12.5%,24.9%→.6 / 25%,37.4%→.35 / 37.5%,to→.15；
+  1s 循环）；**popup 状态卡 / 页内面板 chip / logs 页状态点三处统一**（`.dot` 尺寸 10px 与
+  `dot-busy` 类名语义不变，busy 态内部渲染切换为矩阵）；`prefers-reduced-motion` 置静态。
+  ④ **设置面板分组**：「服务」（端口/Profile/自动打开/徽标）与「界面」（外观四 cube）11px/500
+  caption 组标题，actions 仍在分组外底部；29 个既有 id 全部保留 + 4 个新增状态卡 id（statuscard/state-word/port-text/row2-text），主题引擎/镜像/外观行逻辑
+  （§8.7，M6）零改动。⑤ verify-cdp 新增 15 条 M7 验收记录（14 项断言：状态卡结构/文案、busy 态 Matrix 渲染
+  （8 cell + dot-chase + 全序列 125ms 相位差 + 琥珀状态词）、错误态红调卡、深/浅状态卡背景
+  （深=bluish-800 #353638 精确值）、logs/面板 Matrix 基座、无新增 console 异常；另含 popup-m7.png
+  截图存档），全量 **PASS 65 / FAIL 0**；`popup-m7.png`（浅）/ `popup-dark.png`（深）
+  截图 vision 核验通过。design §8.8 此前已含完整规格与决策点默认取向（胶囊标签保留 /
+  第二行信息保留完整 / 错误态红调卡 / Matrix 纳入）。
+- **M7 修补（2026-08-22，用户实机观察反馈，design §8.8 同步注记）**：① **logs 页状态点闪烁**
+  ——原实现把「页面日志请求在途（2s 自动刷新窗口）」映射为 dot-busy，绿点每 2s 被 Matrix
+  替换几十毫秒再恢复，观感「点阵闪现即无」；改为状态点只表达 dsh 运行状态
+  （error/running/stopped），Matrix 保留在 popup 状态卡与面板 chip（那里 busy=真实 dsh 状态
+  转换/操作在途，语义正确）。② **运行态光晕呼吸**：running/external 圆点加 2.2s 光晕呼吸
+  （光晕 opacity .08↔.18 缓动，实心点静止；浅深通用；reduced-motion 关闭），三处统一
+  （popup/panel/logs）。③ **工具栏徽标风格统一**：badge「文字 ● + 绿底」组合在 Chrome 渲染
+  混乱（自动对比文字色、字符与底吞没）、与面板分层圆点风格不统一 → 改「text:'●' + 绿底
+  #22c55e + **文字色与底同色 #22c55e**」（隐形文字 → 纯绿色状态块；曾试「无文字 + 绿底」
+  ——**Chrome 徽标 text 为空时整体不渲染**，实机重载后徽标不可见，2026-08-22 二次修订）；
+  verify 徽标断言含 text/bg/fg 三值校验。
+  ④ **popup 打开瞬间初始态**：首查 status 返回前静态初始渲染误导（「—」+ 空行2 +
+  「安装 dsh-lifecycle 插件」提示 + 按钮可点）→ hint 初始改「正在获取 dsh 状态…」、状态卡
+  行2 初始「正在获取状态…」、四主按钮与「打开 Web UI」初始 disabled、renderHint 在 detail
+  为空时保持中性。verify-cdp 新增 1 条呼吸动画防回归断言，全量 **PASS 65 / FAIL 0**。
+- **M7 修订二（2026-08-22，用户实机复盘，design §8.8/§8.8.1）**：① **Matrix 点阵动效撤销**
+  ——webui「正在工作」点阵语义=**长时进行中的会话工作**，扩展 busy（starting/stopping/操作
+  在途）是**秒级过渡态**，1Hz 追逐动画套上观感为「点阵闪现」，语义不匹配 → 不使用；busy
+  态统一用琥珀圆点脉冲（既有 `dsh-dot-pulse` 1.2s）；popup/panel/logs 三处矩阵代码
+  （SVG/关键帧/makeMatrix）全部移除，verify 断言改为「dot-busy + :after 脉冲 + 无 matrix」。
+  ② **呼吸改实心点**：光晕太淡难以观察——呼吸迁移到**实心点**（opacity .5↔1 + scale .88↔1，
+  2.2s，肉眼可见脉动）+ 光晕同步 .08↔.16（`dsh-halo-breathe`），三处统一。
+  ③ **设置齿轮补齐内圈**：popup 设置图标此前只有外圈 path（提取不完整）——webui bundle
+  `IconSettingsOutline16` 的 `<g>` 内含两个 path（外圈 + 内圈环 `M9.13764…`——含中心孔
+  429 字节子路径），补全后与 webui 渲染一致（mockup 参考图同步；核对来源：
+  `dsh-web-frontend/dist/assets/index-ClqxG24t.js`）。verify-cdp 断言同步重构
+  （删矩阵断言、新增呼吸/脉冲/无矩阵断言），全量 **PASS 63 / FAIL 0**。
+- **M7 修订三（2026-08-22，用户实测观察——工具栏图标视觉偏小/空间利用率低）**：扩展图标
+  （16/48/128）此前为**透明底黑鲸**（客观测量：内容仅占画布 88%×63%（宽铺满、上下留白
+  37%），且无底色，与相邻 KT 蓝块/黄猫等**满铺色块**图标并列时视觉重量明显偏小——非错觉，
+  实测数据确认）→ 改为**品牌深底（#0F1115，圆角 22%）+ 白色鲸鱼**（webui 深色主题侧栏
+  白鲸同款，品牌一致）：`tools/icons/_gen-icons.js` 渲染模板加满铺 `.bg` 层 + 注入时
+  `fill="#0F1115"→"#FFFFFF"` 替换（`whale.svg` 源文件保持不变）；重新生成后内容占满
+  **100%×100%**、四角保留透明（圆角外透出工具栏背景）。verify-cdp 不涉及图标资产，
+  断言数不变（63/63）。
+- **M6 主题与深色模式（design §8.7，2026-08-22）**：四态主题模型（`follow-webui` 默认 /
+  `follow-system` / `light` / `dark`）。① **深色令牌**：popup.css / logs.css 内联 dsh Web
+  UI 深色主题全量 `--dsw-*`（static/alias/specific，取自 dsh-client-ui-theme 打包源码，
+  仓库内 `tools/ui-theme/dsw-tokens-dark.css` 存档逐字核验），`body[data-ds-dark-theme]`
+  渲染标记与 webui 一致；修正 `.btn.primary` 为 `button-primary-fill` +
+  `label-primary-foreground`（深色 = 白底深字，与 webui 主按钮同策略；
+  原 brand-primary+bluish-00 组合在深色下会白底白字）、toast 三色变体 / `.error` /
+  `.field-invalid` 深色覆盖、`color-scheme: dark`（原生 checkbox/number spinner 正确变深）。
+  ② **主题引擎 `extension/theme.js`**（新，popup/logs 共用，零依赖）：四态白名单解析 +
+  在 `<body>` 设/移除属性 + `storage.onChanged` / `matchMedia change` 实时自动切换。
+  ③ popup 设置面板新增「外观」行（4 个 theme-cube 2×2 网格，复刻 webui AppearanceRow
+  视觉；点选即生效、不弹 toast；保存其它设置保留主题选择；**三态图标为 webui bundle
+  原样提取**：IconLightOutline16 / IconDarkOutline16 / IconFollowsystemOutline16，
+  跟随 Web UI 用鲸鱼剪影）。④ 页内面板：CSS 变量继承
+  天然跟随宿主（零逻辑）；MutationObserver 观察 `body[data-ds-dark-theme]` → 写 storage
+  镜像 `webuiTheme`（幂等、含 port/at），popup/logs 经镜像跟随 webui **实际渲染态**，
+  webui 未开时回退系统主题（design §8.7.3，只读镜像、不回写 webui 偏好）。
+  ⑤ verify-cdp 新增 15 项主题断言（面板深色跟随 / 镜像写入 / popup 四态 +
+  `Emulation.setEmulatedMedia` 系统模拟 / 无新增 console 异常），全量 **PASS 48 / FAIL 0**，
+  `popup-dark.png` / `popup-light.png` 双截图存档（vision 核验通过）。
 - **Windows 隐藏控制台载体（M5.5，2026-08-15）**：消除 dsh 命令执行闪窗——host.js 在
   Windows 下经 `launch-hidden.vbs`（`BASE_DIR` 下运行时自生成）+ `wscript.exe` +
   `WScript.Shell.Run(cmd, 0, False)`（SW_HIDE）拉起 dsh：dsh 获得**存在但从不显示**的

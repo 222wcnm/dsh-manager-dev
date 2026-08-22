@@ -31,7 +31,7 @@ const ERROR_TEXTS = {
   NATIVE_ERROR: '与宿主通信失败，请确认已安装宿主并重启浏览器',
 };
 
-const DEFAULT_SETTINGS = { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30 };
+const DEFAULT_SETTINGS = { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, theme: 'follow-webui', attention: true };
 
 // 操作进行中的按钮文案与阶段说明（点击反馈）
 const ACTION_LABELS = {
@@ -64,6 +64,7 @@ let lastDriftKey = null; // 上次状态漂移提示的键（相同漂移去重�
 // ---------------------------------------------------------------------------
 
 async function init() {
+  DSHTheme.init(); // M6：尽早应用主题（避免浅色闪烁），并订阅 storage/webuiTheme + matchMedia
   bindEvents();
   await loadSettings();
   renderSettingsForm();
@@ -90,6 +91,12 @@ function bindEvents() {
   // 输入时清除无效反馈
   $('set-port').addEventListener('input', () => clearFieldInvalid('set-port'));
   $('set-badge').addEventListener('input', () => clearFieldInvalid('set-badge'));
+  // 外观行（M6）：点选即生效（写入 settings.theme + 即时应用，不弹 toast、不触发 saveSettings）
+  document.querySelectorAll('.theme-cube').forEach((btn) => {
+    btn.addEventListener('click', () => onThemeSelect(btn.getAttribute('data-theme')));
+  });
+  // radiogroup 键盘导航（roving tabindex + 方向键/Home/End）
+  $('theme-grid').addEventListener('keydown', onThemeGridKeydown);
   window.addEventListener('unload', () => {
     if (pollTimer) clearInterval(pollTimer);
     if (tickTimer) clearInterval(tickTimer);
@@ -118,6 +125,7 @@ async function nativeRequest(action, payload) {
 async function refreshStatus() {
   // 操作请求在途时跳过轮询：SW 串行队列会让 status 排在操作之后，白白堆积
   if (pending && pending.ack) return;
+  const reqAt = Date.now(); // 快照发出时刻（用于识别"早于操作"的旧快照）
   let resp;
   try {
     resp = await nativeRequest('status', {});
@@ -129,6 +137,8 @@ async function refreshStatus() {
     setError(resp.error || { code: 'NATIVE_ERROR', message: '未知错误' });
     return;
   }
+  // 快照早于操作发起（请求在途时用户点了操作）：丢弃，等应答后轮询收敛
+  if (pending && pending.atMs > reqAt) return;
   clearError();
   applyStatus(resp.result || {});
 }
@@ -143,6 +153,7 @@ async function manualRefresh() {
   btn.classList.add('is-pending');
   btn.disabled = true;
   try {
+    const reqAt = Date.now(); // 快照发出时刻（用于识别"早于操作"的旧快照）
     let resp;
     try {
       resp = await nativeRequest('status', {});
@@ -154,6 +165,7 @@ async function manualRefresh() {
       setError(resp.error || { code: 'NATIVE_ERROR', message: '未知错误' });
       return;
     }
+    if (pending && pending.atMs > reqAt) return; // 快照早于操作发起：丢弃
     clearError();
     applyStatus(resp.result || {});
   } finally {
@@ -173,8 +185,13 @@ function applyStatus(result) {
     notifyDrift(prev, state);
   }
 
+  // ack=true 表示操作请求仍在途：status 快照可能早于操作，不得判定终态
+  // （否则 restart 应答前的 stopped 旧快照会误清 pending，见 doAction 312 防御）
+  const settled = !pending || !pending.ack;
+
   if (state === 'running') {
     startedAtMs = result.startedAt || Date.now();
+    if (!settled) return render();
     // 我们发起的启动/重启收敛到 running → 完成确认（toast + autoOpen）
     const wasOurStart = !!pending && (pending.action === 'start' || pending.action === 'restart');
     if (wasOurStart) {
@@ -187,11 +204,14 @@ function applyStatus(result) {
     }
   } else if (state === 'stopped' || state === 'error' || state === 'external') {
     startedAtMs = null;
-    if (pending) {
+    if (settled && pending) {
       if (state === 'stopped' && pending.action === 'stop') {
         finishPending(stopStoppedText(), 'success');
       } else if (state === 'error') {
         finishPending('操作未完成，请查看下方错误信息', 'error');
+      } else if (state === 'stopped' && (pending.action === 'start' || pending.action === 'restart')) {
+        // start/restart 的合法中间快照：M5.5 时序下新进程端口就绪前无 run 记录、
+        // status 报 stopped（或 stop 间隙）——保留 pending，等待下一轮 starting/running
       } else {
         finishPending(null, null); // 罕见：目标态变化（如 external 漂移），静默结束 pending
       }
@@ -303,6 +323,10 @@ async function doAction(action) {
     return;
   }
 
+  // 防御：在途 status 快照的竞态可导致 pending 已被提前收敛（applyStatus 已加守卫，
+  // refreshStatus/manualRefresh 已丢弃旧快照，此为兜底）——null 时整体跳过尾处理，
+  // 状态由 2s 轮询自愈；绝不在 null 上写字段（Cannot set properties of null）
+  if (!pending) return;
   const result = resp.result || {};
   if (action === 'restart' && result.state === 'starting') {
     // 宿主内先 stop 后 start：ack 时旧进程已停、新进程已 spawn
@@ -337,23 +361,22 @@ function render() {
   const running = state === 'running';
   const external = state === 'external';
   const stopped = state === 'stopped';
-  const busy = state === 'starting' || state === 'stopping';
   const isError = state === 'error';
   const locked = !!pending; // 操作在途：所有生命周期按钮锁定，防止并发
 
-  // 状态圆点：灰 stopped / 琥珀脉冲 starting·stopping / 绿 running / 蓝 external / 红 error
-  $('dot').className = 'dot ' + (running ? 'dot-running' : external ? 'dot-external' : busy ? 'dot-busy' : isError ? 'dot-error' : 'dot-stopped');
+  // 状态圆点（dotStateClass 集中映射语义 class：running/z/error/stopped + busy 走 Matrix）
+  $('dot').className = 'dot ' + dotStateClass();
 
   // 按钮随状态启用/禁用：external 可接管 + 打开 Web UI（design §6.6/§6.7）
-  $('btn-start').disabled = locked || !stopped;
+  // error 态保留「启动」重试入口（修复端口/安装 dsh 后可直接重试，design §8.2.12）
+  $('btn-start').disabled = locked || !(stopped || isError);
   $('btn-stop').disabled = locked || !running;
   $('btn-restart').disabled = locked || !running;
   $('btn-adopt').disabled = locked || !external;
   $('btn-open').disabled = !running && !external;
 
-  // 接管按钮仅 external 状态显示
+  // 接管按钮仅 external 状态显示（独占一行；打开 Web UI 恒为全宽 ghost）
   $('btn-adopt').classList.toggle('hidden', !external);
-  $('btn-open').classList.toggle('wide', external); // 无接管按钮时占满整行
 
   // 进行中文案 + 转圈：pending 命中的按钮显示 spinner（点击即时反馈）
   setBtnLabel('btn-start', 'start');
@@ -364,78 +387,154 @@ function render() {
   // 操作进度行
   renderProgress();
 
-  // URL 行（running / external 时显示）
-  if (running || external) {
-    const port = (detail && detail.port) || (settings ? settings.port : DEFAULT_SETTINGS.port);
-    $('url-text').textContent = 'http://127.0.0.1:' + port;
-    $('url-row').classList.remove('hidden');
-  } else {
-    $('url-row').classList.add('hidden');
-  }
-  renderUptime();
-
-  // 状态明细行
-  let text = '状态：' + state;
-  if (running) {
-    text = '状态：running' + (detail && detail.pid ? ' · PID ' + detail.pid : '');
-    const health = detail && detail.health;
-    if (health) {
-      text += ' · 健康：' + formatUptime(health.uptimeMs)
-        + (health.nodeVersion ? ' · node ' + health.nodeVersion : '');
-    }
-  } else if (external) {
-    text = '状态：external（外部启动，接管后由扩展管理）'
-      + (detail && detail.pid ? ' · PID ' + detail.pid : '')
-      + (detail && detail.externalCount > 1 ? ' · 共 ' + detail.externalCount + ' 个外部实例' : '');
-  } else if (state === 'starting') {
-    text = '状态：starting（正在启动…'
-      + (detail && detail.requestedPort === 0 ? '，端口自动分配中' : '') + '）';
-  } else if (state === 'stopping') {
-    text = '状态：stopping（正在停止…）';
-  } else if (isError) {
-    text = '状态：error';
-  }
-  $('detail-line').textContent = text;
+  // 状态卡（新三区布局）：状态词 / 端口 / 次级信息行
+  renderStatusCard();
+  renderLegacyStatus(); // 兼容：继续写入隐藏的 url-text/uptime-text/detail-line（保留 id 契约）
 
   // 底部提示：M2 契约 —— lifecycle:true 显示优雅停机已启用
   renderHint();
 }
 
-// 底部提示：lifecycle:true → 优雅停机已启用；否则提示安装插件（宿主未升级字段缺失按 false 兜底）
+// 状态词（#state-word）文本映射（M7 状态卡）
+function stateWordText() {
+  switch (state) {
+    case 'running': return '运行中';
+    case 'external': return '外部实例';
+    case 'starting': return '正在启动…';
+    case 'stopping': return '正在停止…';
+    case 'error': return '状态获取失败';
+    case 'stopped': return '已停止';
+    default: return '—';
+  }
+}
+
+// dot className 语义映射（M7 从 render() 三元链抽取）：
+//   running→dot-running / external→dot-external / busy(starting|stopping)→dot-busy
+//   error→dot-error / 其余→dot-stopped
+function dotStateClass() {
+  if (state === 'running') return 'dot-running';
+  if (state === 'external') return 'dot-external';
+  if (state === 'starting' || state === 'stopping') return 'dot-busy';
+  if (state === 'error') return 'dot-error';
+  return 'dot-stopped';
+}
+
+// 解析当前端口（外部/运行用 detail.port，否则 settings.port；dynam port 未回填时回落 settings）
+function resolvePort() {
+  return (detail && detail.port) || (settings ? settings.port : DEFAULT_SETTINGS.port);
+}
+
+// uptimeMs → 紧凑「{m}m{s}s」（<60s 只显示「{s}s」；非法值兜底 0s）
+function formatCompactUptime(ms) {
+  const sec = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m === 0) return s + 's';
+  return m + 'm' + s + 's';
+}
+
+// 状态卡次级信息（#row2-text）文案（M7）
+function row2Text() {
+  if (state === 'running') {
+    const health = detail && detail.health;
+    const parts = [];
+    if (health) {
+      parts.push('健康');
+      if (health.uptimeMs) parts.push('已运行 ' + formatCompactUptime(health.uptimeMs));
+    }
+    if (detail && detail.pid) parts.push('PID ' + detail.pid);
+    if (health && health.nodeVersion) parts.push('node ' + health.nodeVersion);
+    return parts.join(' · ');
+  }
+  if (state === 'external') {
+    let t = '外部启动，接管后由扩展管理' + (detail && detail.pid ? ' · PID ' + detail.pid : '');
+    if (detail && detail.externalCount > 1) t += ' · 共 ' + detail.externalCount + ' 个外部实例';
+    return t;
+  }
+  if (state === 'starting') {
+    let t = '正在启动：等待端口就绪';
+    if (detail && detail.requestedPort === 0) t += '，端口自动分配中';
+    return t;
+  }
+  if (state === 'stopping') return '正在停止：等待端口关闭';
+  if (state === 'error') {
+    const code = lastError && lastError.code;
+    const msg = (ERROR_TEXTS[code] || (lastError && lastError.message) || code || '').split('\n')[0];
+    return msg || '状态获取失败';
+  }
+  if (state === 'stopped') return 'dsh web 未在运行';
+  return '正在获取状态…';
+}
+
+// 状态卡渲染（M7）：卡片 class + 状态词 + 端口 + 次级信息行
+function renderStatusCard() {
+  const card = $('statuscard');
+  if (!card) return;
+  const busy = state === 'starting' || state === 'stopping';
+  const isError = state === 'error';
+  card.className = 'statuscard' + (isError ? ' error' : busy ? ' warn' : '');
+
+  const sw = $('state-word');
+  if (sw) sw.textContent = stateWordText();
+
+  const portEl = $('port-text');
+  if (!portEl) return;
+  if (state === 'running' || state === 'external') {
+    const port = resolvePort();
+    portEl.textContent = port ? '端口 ' + port : '';
+  } else {
+    portEl.textContent = '';
+  }
+
+  const row2 = $('row2-text');
+  if (row2) row2.textContent = row2Text();
+}
+
+// 兼容：继续写入隐藏容器的 url-text/uptime-text/detail-line（保留 id 契约，展示以新状态卡为准）
+function renderLegacyStatus() {
+  const urlText = $('url-text');
+  if (urlText) {
+    urlText.textContent = (state === 'running' || state === 'external')
+      ? 'http://127.0.0.1:' + resolvePort()
+      : '';
+  }
+  renderUptime();
+  const detailLine = $('detail-line');
+  if (detailLine) detailLine.textContent = '状态：' + state;
+}
+
+// 底部提示：lifecycle:true → 优雅停机已启用；否则提示安装插件（宿主未升级字段缺失按 false 兜底）。
+// 状态未知（首查未返回/失败前 detail 为空）保持中性文案，避免「安装插件」误导（M7 修补）。
 function renderHint() {
   const hint = $('hint');
   if (!hint) return;
-  const lifecycle = !!(detail && detail.lifecycle);
+  if (!detail) {
+    hint.textContent = '正在获取 dsh 状态…';
+    return;
+  }
+  const lifecycle = !!detail.lifecycle;
   hint.textContent = lifecycle
     ? '优雅停机已启用（dsh-lifecycle）'
     : '安装 dsh-lifecycle 插件可优雅停机';
 }
 
-// uptimeMs → 「x m y s」（<60s 只显示「y s」；非法值兜底 0s）
-function formatUptime(ms) {
-  const sec = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  if (m === 0) return s + ' s';
-  return m + ' m ' + s + ' s';
-}
-
-// 单个按钮：pending 命中 → busy 文案 + spinner；否则按状态显示文案
+// 单个按钮：忙碌（本窗口 pending 命中，或无 pending 时轮询观察到的 starting/stopping）
+// → spinner + 「…中」文案，视觉与状态对齐；否则按状态显示 idle 文案
 function setBtnLabel(id, action) {
   const btn = $(id);
   const label = btn.querySelector('.btn-label');
   const mine = pending && pending.action === action;
-  const busyText = ACTION_LABELS[action].busy;
-  const idleText = ACTION_LABELS[action].idle;
-  if (mine) {
-    label.textContent = busyText;
+  // 无 pending 的忙碌态（他处发起 / 宿主回填前 starting）：按钮也转圈，与圆点脉冲一致
+  const stateBusy = !pending && (
+    (state === 'starting' && action === 'start') ||
+    (state === 'stopping' && (action === 'stop' || action === 'restart'))
+  );
+  if (mine || stateBusy) {
+    label.textContent = ACTION_LABELS[action].busy;
     btn.classList.add('is-pending');
   } else {
     btn.classList.remove('is-pending');
-    if (action === 'start') label.textContent = state === 'starting' ? busyText : idleText;
-    else if (action === 'stop') label.textContent = state === 'stopping' ? busyText : idleText;
-    else if (action === 'restart') label.textContent = state === 'stopping' ? busyText : idleText;
-    else label.textContent = idleText; // adopt
+    label.textContent = ACTION_LABELS[action].idle;
   }
 }
 
@@ -554,6 +653,51 @@ function renderSettingsForm() {
   $('set-profile').value = settings.profile;
   $('set-autoopen').checked = !!settings.autoOpen;
   $('set-badge').value = settings.badgeInterval;
+  $('set-attention').checked = settings.attention !== false; // 缺省视为开（向后兼容）
+  renderThemeGrid();
+}
+
+// 外观行（M6）：点选即生效。白名单校验 → 更新内存 settings → 写 storage（保留其它字段）
+// → 调用 DSHTheme.apply() 即时应用（与 webui AppearanceRow 点选即生效一致；不触发
+// saveSettings、不弹 toast）。非法值回退默认（normalizeTheme 已处理）。
+function onThemeSelect(value) {
+  const theme = DSHTheme.normalizeTheme(value);
+  if (settings) settings.theme = theme;
+  // 写回 storage：settings 是 loadSettings 后的完整对象，直接 set 即保留其余字段
+  chrome.storage.local.set({ settings: settings || Object.assign({}, DEFAULT_SETTINGS, { theme }) }, () => {
+    renderThemeGrid();
+    DSHTheme.apply(); // 立即生效（storage.onChanged 亦会触发，幂等）
+  });
+}
+
+// 外观行（M6，design §8.7.5）：按 settings.theme 给选中的 theme-cube 加 .selected + aria-checked
+// radiogroup 键盘语义：选中项 tabindex=0（roving），其余 -1；keydown 方向键/Home/End 换选
+function renderThemeGrid() {
+  const theme = DSHTheme.normalizeTheme(settings.theme);
+  const cubes = document.querySelectorAll('.theme-cube');
+  cubes.forEach((btn) => {
+    const sel = btn.getAttribute('data-theme') === theme;
+    btn.classList.toggle('selected', sel);
+    btn.setAttribute('aria-checked', sel ? 'true' : 'false');
+    btn.setAttribute('tabindex', sel ? '0' : '-1'); // roving tabindex
+  });
+}
+
+const THEME_ORDER = ['follow-webui', 'follow-system', 'light', 'dark'];
+
+// radiogroup 方向键导航：ArrowRight/Down 下一个、ArrowLeft/Up 上一个、Home/End 首/末
+function onThemeGridKeydown(e) {
+  const idx = THEME_ORDER.indexOf(e.target.getAttribute('data-theme'));
+  if (idx < 0) return; // 焦点不在 cube 上
+  let next = -1;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % THEME_ORDER.length;
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + THEME_ORDER.length) % THEME_ORDER.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = THEME_ORDER.length - 1;
+  else return;
+  e.preventDefault();
+  const target = document.querySelector('.theme-cube[data-theme="' + THEME_ORDER[next] + '"]');
+  if (target) { target.focus(); target.click(); } // 换选并即时生效（click 走 onThemeSelect）
 }
 
 function toggleSettings(force) {
@@ -590,6 +734,8 @@ function saveSettings() {
     profile: profile || 'web',
     autoOpen: $('set-autoopen').checked,
     badgeInterval: badge,
+    theme: settings ? settings.theme : DEFAULT_SETTINGS.theme, // 保留主题选择（M6）
+    attention: $('set-attention').checked, // M8 徽标提醒开关（design §8.9）
   };
 
   chrome.storage.local.set({ settings: next }, () => {

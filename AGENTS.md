@@ -28,7 +28,7 @@ node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单�
 powershell -ExecutionPolicy Bypass -File native-host\install.ps1 -DryRun   # 安装预演（Windows）
 sh native-host/install.sh --dry-run                                          # 安装预演（Linux/macOS）
 powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E  # WSL Linux 冒烟 + 真实安装 E2E
-node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 33 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 面板体验回归（托管绿点+端口、展开时胶囊位置不变、面板在胶囊上方、扩展重载后旧面板提示刷新/刷新恢复） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + console 异常检查）
+node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 71 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 面板体验回归（托管绿点+端口、展开时胶囊位置不变、面板在胶囊上方、扩展重载后旧面板提示刷新/刷新恢复） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + M8 徽标提醒（SW 分层 done「!」/ waiting「?」/ 清空恢复 + e2e 后台页注入等待标记 → 紫「?」→ 切回标签自动清除）+ 主题与深色断言（面板深色跟随、storage 镜像写入、popup 四态 + Emulation 系统模拟、深色段无新增 console 异常）+ M7 断言（状态卡结构/文案、状态变体（running 实心点呼吸 / external / busy 琥珀脉冲无矩阵 / error 红调卡 / stopped 灰点）、深/浅状态卡背景（深=#353638 精确值）、面板呼吸动画）+ console 异常检查）
 node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome-devtools-mcp，需沙箱外）
 ```
 
@@ -43,6 +43,110 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
 
 ## 当前状态与路线
 
+- **M8 徽标提醒「该点回来看看了」（2026-08-22，design §8.9）**：
+  解决「用户不驻守 dsh 标签」场景——dsh 页面在后台时，会话状态变化经工具栏徽标提醒：
+  一轮工作完成 → 琥珀「!」（`#f59e0b`）；随时等待拍板（批准/问答/计划审查）→ 紫「?」
+  （`#8b5cf6`——方案 A（2026-08-22 用户决策）：原红「?」#ec1313 与状态层错误红撞色，
+  紫=「等你拍板」专用色，红色全域只留给错误；§8.9.1 三层语义分层表），优先级覆盖完成；
+  页面重新可见/标签关闭自动清除，徽标恢复服务态（绿点/空）。
+  ① **检测层（content/panel.js）**：只读扫描 webui StateDot 的**语义 data-state 属性**（事实
+  基线取自 @deepseek-ai/dsh-client-ui-workspace 0.1.1-rc.2：工作中 = `svg[data-state="ongoing"]`
+  点阵、等待用户 = `[data-state="warning"]`、空闲/完成 = `done`）——非 CSS-module 哈希类名，
+  跨版本漂移风险低；仅判定存在性，**不读消息内容**（§12.2 已补例外说明）。状态机
+  `idle→working→(稳定 1.2s 空态)→done-fired`；`waiting-fired` 出现即上报；`document.hidden`
+  （标签不活跃/窗口最小化）才上报，可见即 clear；`done-fired` 须再见 working 才可复位
+  （防同一轮重复上报）。② **渲染层（background.js）**：`attentionMap`（storage.local，
+  `{tabId:{kind,at}}`，MV3 SW 可回收的安全持久化）+ 徽标分层渲染 `waiting > done > 服务态`
+  （`refreshBadge` 只算服务态快照，`applyBadge` 统一应用）；`sender.tab.id` 为事实键（多
+  dsh 标签各记各）；`tabs.onRemoved`/`onStartup`/`onInstalled` 清理 + 4h TTL 兜底防僵尸键；
+  `settings.attention`（默认开）关闭后忽略 set 并回退服务态。③ **popup**：设置面板「界面」
+  分组新增「徽标提醒（回来看看）」开关（`set-attention`）。④ **verify-cdp 新增 8 条
+  记录**（7 断言 + 1 e2e 异常兜底记录）：SW 分层渲染（done→琥珀「!」/ waiting→紫「?」
+  且覆盖 / 清空恢复）+ e2e（真实 dsh 页
+  切后台 → 注入 `[data-state="warning"]` → 紫「?」→ 切回标签自动清除）——e2e 依赖
+  `--headless=new` 的标签激活可见性语义与内容脚本 1s 扫描；全量 **PASS 71 / FAIL 0**；
+  `node --check` 全过。
+  已知局限（design §8.9）：会话侧栏完全关闭（宽度 0，行组件卸载）时无标记可扫（默认布局
+  与窄屏 rail 均渲染行）；仅 alt-tab 到其他应用（窗口未最小化）时 `document.hidden=false`
+  不触发——浏览器页面可见性语义。
+  **M8 修补（2026-08-22，子代理盲审后修订）**：① **H1**：`handleAttention` 的 set 分支加
+  `cachedSettings.attention === false` 前置拒绝（原实现只在渲染层看开关——关闭期间 SW 仍
+  被事件唤醒写 storage，且重开开关会冒出关闭期间累积的陈旧提醒；storage.onChanged 在开关
+  变 off 瞬间清空 attentionMap）；② **M1**：verify 补 done「!」路径真实链路 e2e（注入
+  `svg[data-state=ongoing]`→移除→attentionMap done 条目+琥珀「!」；基线存在真实工作中会话
+  时如实记录不执行）；③ **M2**：同标签导航离开 dsh 时清残留——panel.js `pagehide` 发
+  clear + SW `tabs.onUpdated` 按 URL 判定兜底；④ **L3**：`handleAttention` 校验
+  `sender.tab.url` 为 dsh 回环页（本扩展 host_permissions 覆盖，零新权限）；⑤ **L4**：
+  background `DEFAULT_SETTINGS` 补 `theme:'follow-webui'`（与 popup 默认值分裂会导致
+  onInstalled 合并丢弃主题）；⑥ **L2**：verify 断言补 fg=白（`getBadgeTextColor`）；
+  e2e 以 storage `attentionMap` 条目为链路证据（防「页面原生 warning」假阳性）+ `hidden`
+  显式断言 + 轮询替代固定 sleep（M4 缓解）。verify-cdp M8 段现为 7 断言 + 1 e2e 异常兜底记录。
+- **M7 完成（2026-08-22：popup 排版优化——方案 A「应用栏 + 状态卡 + 分组设置」，design §8.8，verify-cdp 当前口径 63/63）**：
+  解决 §8.2 现行排版的「平铺朴实感」。① **三区结构**（popup.html/css/js）：应用栏
+  （20px 鲸鱼 + 「DSH Manager」15/600 + 「dsh web」胶囊标签 + 28px 圆形刷新/设置）、
+  **状态卡**（`bg-module-platform` 底 + border-l1 + 圆角 12：状态词 13/500 + 端口 12/500
+  业务蓝 + 次级行 11.5px caption tabular-nums——原 url-row/detail-line 三处文本合并为卡内
+  两行，`renderStatusCard()`/`dotStateClass()` 抽出；`#dot`/`#url-text`/`#uptime-text`/
+  `#detail-line` 等 29 个既有 id 全保留（旧三元素移入隐藏 legacy 容器）+ 4 个新增状态卡 id
+  （statuscard/state-word/port-text/row2-text））、操作区
+  （h32 primary/danger/outline + 「打开 Web UI」全宽 ghost）、底栏（border-top-l1 +
+  11px 提示 + 「查看日志」link）。② **状态变体**：running 绿点（**实心点呼吸 2.2s**：opacity
+  .5↔1 + scale .88↔1，光晕同步 .08↔.16——用户偏好，光晕单独呼吸难观察故迁移到实心点）/
+  stopped 灰点 / external 蓝点（同呼吸）端口 / starting·stopping 琥珀 warn + **琥珀圆点脉冲**
+  （1.2s；webui Matrix 点阵已撤销，见下）/ **error 红调卡**
+  （border rgba(236,19,19,.25) + 状态词 error 红，错误详情仍走既有 error 面板）。
+  ③ **§8.8.1 Matrix 动效（已撤销 2026-08-22 用户复盘）**：曾按 webui 会话侧栏「正在工作」
+  点阵原样复刻（SVG 10×10 viewBox 3×3 外圈 8 个 2×2 rect、`@keyframes dot-chase` 1s 循环、
+  125ms 相位差——提取存档见 git 历史）；复盘结论：webui 点阵语义=**长时进行中的会话工作**，
+  扩展 busy（starting/stopping/操作在途）是**秒级过渡态**，1Hz 追逐动画套上观感为「点阵闪现」，
+  语义不匹配 → 不使用，busy 统一琥珀脉冲；popup/panel/logs 三处矩阵代码（SVG/关键帧/
+  makeMatrix）全部移除。全部视觉走 `--dsw-*` 令牌零新增硬编码色，深色随 §8.7 自动适配；
+  设置面板加「服务」/「界面」分组（11px/500 caption 组标题，actions 仍在分组外底部），
+  **M6 主题引擎/镜像/外观行逻辑零改动**（另：设置齿轮补齐内圈 path——webui bundle
+  `IconSettingsOutline16` 的 `<g>` 含外圈+内圈环两个 path，此前只内联外圈致「只有外圈没内圈」，
+  已从 `dsh-web-frontend/dist/assets/index-ClqxG24t.js` 补全，与 webui 渲染一致；
+  工具栏扩展图标同批修补：透明黑鲸（内容仅 88%×63% 上下留白 37%、无底色，与相邻满铺色块
+  图标比显小）→ 品牌深底 #0F1115 圆角 22% + 白色鲸鱼（100%×100% 满铺，webui 深色主题
+  白鲸同款；_gen-icons.js 模板加 .bg 层 + 注入 fill 替换，whale.svg 源不变，重新生成已入库））。
+  ④ verify-cdp 当前 13 条 M7 验收记录（12 项断言：状态卡结构/文案、状态变体（running 实心
+  点呼吸 / external / busy 琥珀脉冲无矩阵 / error 红调卡 / stopped 灰点）、深/浅状态卡背景
+  （深=bluish-800 #353638 精确值）、面板呼吸动画、无新增 console 异常；另含 popup-m7.png
+  截图存档），全量 **PASS 63 / FAIL 0**；`popup-m7.png`（浅）/ `popup-dark.png`（深）截图
+  vision 核验通过。已知遗留（低）：「点击操作的真实 busy 视觉未截图」；深度审核另见盲审报告。
+  **M7 修补（2026-08-22，用户实机观察反馈，design §8.8 注记）**：
+  ① logs 页状态点原把「页面日志请求在途（2s 自动刷新窗口）」映射为 dot-busy——绿点每 2s 被
+  Matrix 替换几十毫秒再恢复（「点阵闪现」），改为状态点只表达 dsh 运行状态（error/running/
+  stopped，busy 不再上点）；
+  ② 徽标「●」+ 绿底组合渲染混乱（Chrome 自动对比文字色）→ 改「text:'●' + 绿底 #22c55e +
+  文字色同底」（隐形文字=纯绿状态块；曾试「无文字+绿底」——**Chrome 徽标空 text 整体不渲染**，
+  实机重载后不可见，二次修订；verify 断言 text/bg/fg 三值）；③ popup 打开瞬间初始态（首查前「—」+空行2+「安装插件」提示+按钮可点）
+  → hint/行2 中性文案 + 主按钮初始 disabled。注意：**sandbox 拦截 headless Chrome 启动（mojo 管道 0x5），
+  运行 verify-cdp 需 danger-full-access 侧挂**（2026-08-22 实测）。
+- **M6 完成（2026-08-22：主题与深色模式，design §8.7，verify-cdp 48/48）**：四态主题模型
+  （`follow-webui` 默认 / `follow-system` / `light` / `dark`）。① 深色令牌：popup.css /
+  logs.css 内联 dsh Web UI 深色主题全量 `--dsw-*`（static/alias/specific，取自
+  dsh-client-ui-theme 打包源码；仓库内 `tools/ui-theme/dsw-tokens-dark.css` 存档，改动前
+  用提取脚本重跑核对），`body[data-ds-dark-theme]` 渲染标记与 webui 一致；`.btn.primary`
+  改 `button-primary-fill`+`label-primary-foreground`（深色=白底深字与 webui 同策略，
+  原 brand-primary+bluish-00 深色下会白底白字）、toast/`.error`/`.field-invalid` 深色覆盖、
+  `color-scheme: dark`。② `extension/theme.js`（新，popup/logs 共用）：四态白名单解析 +
+  body 属性应用 + storage.onChanged / matchMedia 实时自动切换。③ popup 设置面板「外观」行
+  （4 个 theme-cube 2×2，复刻 webui AppearanceRow 视觉，点选即生效；保存其它设置保留主题；
+  **三态图标为 webui bundle 原样提取**：IconLightOutline16 / IconDarkOutline16 /
+  IconFollowsystemOutline16——变更时用括号平衡提取器从 dist/assets/index-*.js 抽同名变量
+  定义，勿自绘近似；跟随 Web UI 用鲸鱼剪影）。
+  ④ 面板：CSS 变量继承天然跟随（零逻辑），MutationObserver 观察 `body[data-ds-dark-theme]`
+  → storage 镜像 `webuiTheme`（幂等含 port/at），popup/logs 跟随 webui **实际渲染态**（只读
+  镜像、不回写 webui 偏好），webui 未开时回退系统主题。⑤ verify-cdp 新增 15 项主题断言
+  （面板深色跟随/镜像写入/popup 四态+Emulation 系统模拟/无新增 console 异常），全量
+  PASS 50 / FAIL 0（**含盲审修复后的 2 条防回归断言**：浅色选中态背景渲染、外观行键盘导航）；
+  popup-dark/light 双截图 vision 核验通过。盲审修复（2026-08-22）：浅色 :root 补
+  `--dsw-alias-bg-module-platform`（此前 theme-cube 选中态浅色下无背景）、panel.js
+  镜像加 `contextAlive()` 前置 + 失效 disconnect、外观行补 radiogroup roving tabindex +
+  方向键、popup/logs :root 定义 `--dsw-shadow-lv1/2`。注意：**sandbox 拦截 headless
+  Chrome 启动（mojo 管道 0x5），运行 verify-cdp 需 danger-full-access 侧挂**（2026-08-22 实测）。
+  已知遗留（低）：verify-cdp 主题段有多处固定 sleep 与「SW 不在线即失败」判定，
+  盲审标注为潜在 flaky 源，两轮全量实跑稳定，待后续改用 waitFor 轮询 + SW 离线 SKIP。
 - **M1 完成**：冒烟 38/38 通过，真机可用
 - **M1.1 完成（外部实例检测）**：冒烟 57/57 通过。status 无 run 记录时自动发现外部 dsh web（进程枚举 powershell → 命令行解析 `--port` → netstat 端口表回退 → `GET /` 指纹 `DeepSeek Harness`），`external` 状态展示 + 打开 UI；stop/restart 返回 `EXTERNAL_UNMANAGED`；测试钩子 `DSH_MANAGER_FAKE_PROCESSES`/`DSH_MANAGER_FAKE_LISTENERS`
 - **M1.2 完成（外部实例接管 + Web UI 同款视觉）**：冒烟 70/70 通过。`adopt` 动作（pid+port 双重匹配 → 解析原命令行 → 回写 run 记录 `adopted:true`），接管后 stop/restart 可用，restart 按原 argv 归一化重放且血统延续（跳过 §12.1 白名单，参数源自本机进程表）；popup 重设计为 dsh Web UI 同款设计令牌（`--dsw-*` 浅色主题，令牌值取自 dsh Web UI 存档），鲸鱼 logo 与设置齿轮图标从同一存档原样内联

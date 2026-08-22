@@ -181,8 +181,34 @@ async function main() {
   log('访问 popup.html');
   const popupText = await visit('popup.html', 'popup');
   record('popup 含标题「dsh web」', popupText.includes('dsh web'), JSON.stringify(popupText.split('\n').slice(0, 4)));
-  record('popup 渲染状态/错误文案', popupText.includes('状态：') || popupText.includes('未安装宿主'),
-    (popupText.includes('状态：') ? '状态行存在' : popupText.includes('未安装宿主') ? 'HOST_NOT_INSTALLED 面板（沙箱内预期）' : '缺失'));
+  // M7：状态卡结构（.statuscard/.sc-row1/.state-word/.sc-port/.sc-row2 契约）
+  const m7CardInfo = await page.send('Runtime.evaluate', {
+    expression: `(() => {
+      const c = document.getElementById('statuscard');
+      if (!c) return JSON.stringify({ present: false });
+      const row1 = c.querySelector('.sc-row1');
+      const word = document.getElementById('state-word');
+      const port = document.getElementById('port-text');
+      const row2 = document.getElementById('row2-text');
+      return JSON.stringify({
+        present: true, row1: !!row1,
+        word: word ? word.textContent : '', port: port ? port.textContent : '', row2: row2 ? row2.textContent : '',
+        bg: getComputedStyle(c).backgroundColor,
+      });
+    })()`,
+    returnByValue: true,
+  });
+  let m7Card = { present: false };
+  try { m7Card = JSON.parse(m7CardInfo && m7CardInfo.result ? String(m7CardInfo.result.value) : '{}'); } catch (_) { /* 保持默认 */ }
+  record('M7：popup 状态卡结构（.statuscard/.sc-row1/state-word/sc-port/sc-row2）',
+    m7Card.present === true && m7Card.row1 === true, JSON.stringify(m7Card));
+  record('M7：状态卡文案（状态词非空 + 端口格式 + 次级行）',
+    m7Card.present === true && m7Card.word.length > 0
+      && (m7Card.port === '' || /^端口 \d+$/.test(m7Card.port))
+      && (m7Card.row2.length > 0 || m7Card.word === '—'),
+    JSON.stringify(m7Card));
+  record('popup 渲染状态/错误文案', popupText.includes('状态：') || popupText.includes('未安装宿主') || m7Card.word.length > 0,
+    m7Card.word ? '状态卡状态词=' + m7Card.word : '缺失');
   record('popup 含「查看日志」入口', popupText.includes('查看日志'), '');
 
   // 4) logs.html：断言标题与错误横幅/日志底栏
@@ -214,6 +240,7 @@ async function main() {
         chip: chip ? chip.textContent.trim() : '',
         status: status ? status.textContent.trim() : '',
         dot: dot ? dot.className : '',
+        breathe: dot ? getComputedStyle(dot, '::after').animationName : '',
       });
     })()`,
     returnByValue: true,
@@ -226,6 +253,8 @@ async function main() {
   record('面板：托管运行中为绿点且显示端口',
     panelInfo.dot === 'dot dot-running' && /端口 \d+/.test(panelInfo.status || ''),
     JSON.stringify(panelInfo));
+  record('M7：面板运行态实心点呼吸（dsh-dot-breathe）', panelInfo.breathe === 'dsh-dot-breathe',
+    'breathe=' + panelInfo.breathe);
   const shot3 = await page.send('Page.captureScreenshot', { format: 'png' });
   const panelPng = pathShots('panel.png');
   fs.writeFileSync(panelPng, Buffer.from(shot3.data, 'base64'));
@@ -362,8 +391,18 @@ async function main() {
       record('徽标：SW 环境探针', true, String(probe.value));
       await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 0, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
       await evalInSw('refreshBadge()');
-      const badge0 = await evalInSw('chrome.action.getBadgeText({})');
-      record('徽标：port 0 经 native status 显示绿点', badge0.value === '●', 'badge=' + JSON.stringify(badge0.value) + (badge0.raw ? ' ' + badge0.raw : ''));
+      const badge0 = await evalInSw(`(async () => JSON.stringify({
+        text: await chrome.action.getBadgeText({}),
+        bg: JSON.stringify(await chrome.action.getBadgeBackgroundColor({})),
+        fg: JSON.stringify(await chrome.action.getBadgeTextColor({})),
+      }))()`);
+      // M7 修补：徽标=text '●' + 绿底 + 文字色同底（隐形文字 → 纯绿色状态块；空 text 不渲染）
+      const badgeStr = String(badge0.value || '');
+      const badgeGreen = /#22c55e|22c55e|34,\s*197,\s*94/i.test(badgeStr);
+      const textOk = /"text":"●"/.test(badgeStr);
+      const fgSameAsBg = /"fg":"#22c55e"|34,\s*197,\s*94/.test(badgeStr);
+      record('徽标：port 0 经 native status 显示绿色状态块（● + 绿底 + 同色字）',
+        badgeGreen && textOk && fgSameAsBg, 'badge=' + badgeStr + (badge0.raw ? ' ' + badge0.raw : ''));
       await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 59999, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
       await evalInSw('refreshBadge()');
       const badgeNone = await evalInSw('chrome.action.getBadgeText({})');
@@ -371,7 +410,183 @@ async function main() {
       await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
       await evalInSw('refreshBadge()');
       const badgeDefault = await evalInSw('chrome.action.getBadgeText({})');
-      record('徽标：恢复默认端口后无异常', badgeDefault.value === '●' || badgeDefault.value === '', 'badge=' + JSON.stringify(badgeDefault.value) + (badgeDefault.raw ? ' ' + badgeDefault.raw : ''));
+      record('徽标：恢复默认端口后无异常（text=● 或空）', badgeDefault.value === '●' || badgeDefault.value === '', 'badge=' + JSON.stringify(badgeDefault.value) + (badgeDefault.raw ? ' ' + badgeDefault.raw : ''));
+
+      // ---- M8 helpers：轮询替代固定 sleep（缓解隐藏页 1Hz 节流 + SW 多跳竞态，M4）----
+      const waitFor = async (fn, timeoutMs) => {
+        const deadline = Date.now() + timeoutMs;
+        for (;;) {
+          if (await fn()) return true;
+          if (Date.now() >= deadline) return false;
+          await sleep(400);
+        }
+      };
+      const getBadgeJson = () => evalInSw(`(async () => JSON.stringify({
+        text: await chrome.action.getBadgeText({}),
+        bg: JSON.stringify(await chrome.action.getBadgeBackgroundColor({})),
+        fg: JSON.stringify(await chrome.action.getBadgeTextColor({})),
+      }))()`);
+      const badgeHas = (str, wantText, wantBgRe) =>
+        str.includes('"text":"' + wantText + '"') && wantBgRe.test(str) && /255,\s*255,\s*255/.test(str);
+      const attEntryKind = (kind) => evalInSw(`(async () => {
+        const d = await chrome.storage.local.get({ attentionMap: {} });
+        const m = d.attentionMap || {};
+        return Object.keys(m).some((k) => m[k] && m[k].kind === '${kind}');
+      })()`);
+      const attEmpty = () => evalInSw(`(async () => {
+        const d = await chrome.storage.local.get({ attentionMap: {} });
+        return Object.keys(d.attentionMap || {}).length === 0;
+      })()`);
+      const pageEvalInfo = () => page.send('Runtime.evaluate', {
+        expression: `(() => JSON.stringify({
+          hidden: document.hidden,
+          warning: document.querySelectorAll('[data-state="warning"]').length,
+          ongoing: document.querySelectorAll('svg[data-state="ongoing"]').length,
+          mine: !!document.getElementById('dshm-test-warning') || !!document.getElementById('dshm-test-ongoing'),
+        }))()`,
+        returnByValue: true,
+      });
+
+      // 8a) M8 徽标提醒（design §8.9）：storage attentionMap 驱动徽标分层渲染——
+      //     done → 琥珀「!」；waiting → 紫「?」（等待你拍板专用色，优先级覆盖 done；
+      //     不与状态层错误红撞色——方案 A）；文字色显式白；清空 → 恢复服务态。
+      await evalInSw(`(async () => {
+        await chrome.storage.local.set({
+          settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, attention: true, theme: 'follow-webui' },
+          attentionMap: { 9861: { kind: 'done', at: Date.now() } },
+        });
+      })()`);
+      const doneOk = await waitFor(async () => {
+        await evalInSw('applyBadge()');
+        const j = await getBadgeJson();
+        return badgeHas(String(j.value || ''), '!', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
+      }, 5000);
+      const bDone = await getBadgeJson();
+      record('M8：徽标提醒 done → 琥珀「!」（白字）', doneOk,
+        'badge=' + String(bDone.value || '') + (bDone.raw ? ' ' + bDone.raw : ''));
+      await evalInSw(`(async () => {
+        await chrome.storage.local.set({ attentionMap: { 9861: { kind: 'waiting', at: Date.now() } } });
+      })()`);
+      const waitOk = await waitFor(async () => {
+        await evalInSw('applyBadge()');
+        const j = await getBadgeJson();
+        return badgeHas(String(j.value || ''), '?', /#8b5cf6|8b5cf6|139,\s*92,\s*246/i);
+      }, 5000);
+      const bWait = await getBadgeJson();
+      record('M8：徽标提醒 waiting → 紫「?」（优先级覆盖 done，白字）', waitOk,
+        'badge=' + String(bWait.value || '') + (bWait.raw ? ' ' + bWait.raw : ''));
+      await evalInSw(`(async () => { await chrome.storage.local.set({ attentionMap: {} }); })()`);
+      const restoreOk = await waitFor(async () => {
+        await evalInSw('applyBadge()');
+        const j = await evalInSw('chrome.action.getBadgeText({})');
+        return j.value === '●' || j.value === '';
+      }, 5000);
+      record('M8：提醒清空后恢复服务态徽标（● 或空）', restoreOk, '');
+
+      // 8a-2) M8 端到端（content script → SW，真实链路）：真实 dsh 页面切后台 →
+      //       注入等待标记 → 紫「?」（以 storage attentionMap 条目为链路证据）；
+      //       （工作→完成路径，仅当基线无真实工作中会话时执行——真实会话运行中则如实记录）；
+      //       切回 dsh 标签 → 自动 clear（attentionMap 空 + 徽标恢复）。
+      try {
+        const tab2 = await fetchJson('http://127.0.0.1:' + PORT + '/json/new?about:blank', { method: 'PUT' });
+        await browserWs.send('Target.activateTarget', { targetId: tab2.id });
+        await waitFor(async () => {
+          const h = await pageEvalInfo();
+          try { return JSON.parse(String(h.result.value)).hidden === true; } catch (_) { return false; }
+        }, 5000); // dsh 标签转后台（页面可见性为 e2e 前置）
+        const baseInfo = await pageEvalInfo();
+        let base = {};
+        try { base = JSON.parse(String(baseInfo.result.value)); } catch (_) { /* 保持默认 */ }
+        record('M8：e2e 前置——dsh 页面已转后台（document.hidden）',
+          base.hidden === true, JSON.stringify(base));
+
+        // —— waiting 链路：注入等待标记 → content script 上报 → attentionMap 条目 + 紫「?」——
+        await page.send('Runtime.evaluate', {
+          expression: `(() => {
+            if (!document.getElementById('dshm-test-warning')) {
+              const s = document.createElement('span');
+              s.id = 'dshm-test-warning';
+              s.setAttribute('data-state', 'warning');
+              s.style.display = 'none';
+              document.body.appendChild(s);
+            }
+            return 'injected';
+          })()`,
+          returnByValue: true,
+        });
+        const wAttOk = await waitFor(() => attEntryKind('waiting'), 8000);
+        const wBadgeOk = await waitFor(async () => {
+          const j = await getBadgeJson();
+          return badgeHas(String(j.value || ''), '?', /#8b5cf6|8b5cf6|139,\s*92,\s*246/i);
+        }, 4000);
+        const bAtt = await getBadgeJson();
+        record('M8：e2e 后台+等待标记 → 紫「?」（attentionMap 有 waiting 条目为链路证据）',
+          wAttOk && wBadgeOk,
+          'badge=' + String(bAtt.value || '') + ' base=' + JSON.stringify(base) + (bAtt.raw ? ' ' + bAtt.raw : ''));
+        await page.send('Runtime.evaluate', {
+          expression: `(() => { const n = document.getElementById('dshm-test-warning'); if (n) n.remove(); return 'removed'; })()`,
+          returnByValue: true,
+        });
+
+        // —— 清场：切回 dsh 标签（可见 → clear）→ 等待 attentionMap 空 ——
+        await browserWs.send('Target.activateTarget', { targetId: tab.id });
+        const clearOk = await waitFor(attEmpty, 6000);
+        record('M8：e2e 切回 dsh 标签自动清除提醒（attentionMap 空）', clearOk,
+          'badge=' + JSON.stringify((await evalInSw('chrome.action.getBadgeText({})')).value));
+
+        // —— done 链路：仅当基线无真实工作中会话时执行；否则如实记录（真实会话在跑，无法隔离）——
+        await browserWs.send('Target.activateTarget', { targetId: tab2.id });
+        await waitFor(async () => {
+          const h = await pageEvalInfo();
+          try { return JSON.parse(String(h.result.value)).hidden === true; } catch (_) { return false; }
+        }, 5000);
+        const base2Info = await pageEvalInfo();
+        let base2 = {};
+        try { base2 = JSON.parse(String(base2Info.result.value)); } catch (_) { /* 保持默认 */ }
+        if (base2.ongoing > 0) {
+          record('M8：e2e 工作→完成（done）链路——基线存在真实工作中会话，本段如实记录（非失败）',
+            true, 'ongoing=' + base2.ongoing + '（真实 dsh 会话仍在运行；done 链路待空闲环境覆盖）');
+        } else {
+          await page.send('Runtime.evaluate', {
+            expression: `(() => {
+              if (!document.getElementById('dshm-test-ongoing')) {
+                const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                s.id = 'dshm-test-ongoing';
+                s.setAttribute('data-state', 'ongoing');
+                s.style.display = 'none';
+                document.body.appendChild(s);
+              }
+              return 'injected';
+            })()`,
+            returnByValue: true,
+          });
+          await sleep(2500); // 让状态机进入 working（隐藏页 1Hz 节流下 2-3 tick）
+          await page.send('Runtime.evaluate', {
+            expression: `(() => { const n = document.getElementById('dshm-test-ongoing'); if (n) n.remove(); return 'removed'; })()`,
+            returnByValue: true,
+          });
+          const dAttOk = await waitFor(() => attEntryKind('done'), 9000);
+          const dBadgeOk = await waitFor(async () => {
+            const j = await getBadgeJson();
+            return badgeHas(String(j.value || ''), '!', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
+          }, 4000);
+          const bDone2 = await getBadgeJson();
+          record('M8：e2e 工作→完成 → 琥珀「!」（attentionMap 有 done 条目为链路证据）',
+            dAttOk && dBadgeOk,
+            'badge=' + String(bDone2.value || '') + ' base=' + JSON.stringify(base2) + (bDone2.raw ? ' ' + bDone2.raw : ''));
+        }
+
+        // —— 收尾：切回 dsh 标签 → clear 恢复，关闭辅助标签 ——
+        await browserWs.send('Target.activateTarget', { targetId: tab.id });
+        const clearOk2 = await waitFor(attEmpty, 6000);
+        const bRestore2 = await evalInSw('chrome.action.getBadgeText({})');
+        record('M8：e2e 结束恢复（attentionMap 空 + 服务态徽标）',
+          clearOk2 && (bRestore2.value === '●' || bRestore2.value === ''),
+          'badge=' + JSON.stringify(bRestore2.value));
+        await fetchJson('http://127.0.0.1:' + PORT + '/json/close/' + tab2.id, { method: 'PUT' }).catch(() => { /* 标签已关闭/正在关闭：非致命 */ });
+      } catch (e2) {
+        record('M8：端到端（内容脚本→SW 提醒链路）', false, 'e2e 异常: ' + e2.message);
+      }
     } catch (e) {
       record('徽标（扩展 SW 目标）', false, 'SW 附加失败: ' + e.message);
     }
@@ -509,6 +724,351 @@ async function main() {
     return t ? t.textContent : '';
   })()`);
   record('popup：合法设置保存 toast', saveInfo.includes('设置已保存'), saveInfo);
+
+  // 11) 主题与深色模式（design §8.7.7）
+  //    契约：settings.theme ∈ {follow-webui,follow-system,light,dark}（默认 follow-webui，
+  //    并行代理实现 theme.js 落 body[data-ds-dark-theme]）；webuiTheme={dark,at,port}（无镜像时
+  //    键不存在）；深色 bg-base=#151517=rgb(21,21,23)，浅色=#fff=rgb(255,255,255)。
+  //    全走「设置 → 重载/等待 → 断言」确定性路径；console 异常沿用既有收集。
+  log('主题与深色模式（§8.7.7）');
+  consoleErrors.length = 0; // 主题段专用的 console 收集（清掉此前 dsh 页面/设置段的日志）
+  const DARK_BG = 'rgb(21, 21, 23)';      // #151517
+  const LIGHT_BG = 'rgb(255, 255, 255)';  // #ffffff
+  const isDarkRgb = (bg) => {
+    const m = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(String(bg || ''));
+    return !!m && (Number(m[1]) + Number(m[2]) + Number(m[3])) < 300;
+  };
+  // 主题段统一 evaluate（带 awaitPromise：chrome.storage.* 均为 async）
+  const evalPage = async (expr) => {
+    const r = await page.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+    return r && r.result ? String(r.result.value ?? '') : '';
+  };
+  const gotoPopup = async () => {
+    await page.send('Page.navigate', { url: 'chrome-extension://' + extId + '/popup.html' });
+    await sleep(2500);
+  };
+  const gotoDsh = async () => {
+    await page.send('Page.navigate', { url: dshUrl });
+    await sleep(8000); // 等 SPA 加载 + content script 注入（与第 6 步同等待窗口）
+  };
+  const shotPng = async (name) => {
+    const r = await page.send('Page.captureScreenshot', { format: 'png' });
+    const png = pathShots(name.endsWith('.png') ? name : name + '.png'); // 统一 .png 扩展名
+    fs.writeFileSync(png, Buffer.from(r.data, 'base64'));
+    record(name + ' 截图', fs.statSync(png).size > 2000, png + ' (' + fs.statSync(png).size + ' bytes)');
+  };
+  // 在 popup 扩展上下文写 settings.theme（合并既有 settings，避免冲掉 port/profile 等字段）
+  const setPopupTheme = async (theme) => {
+    await evalPage(`(async () => {
+      const cur = (await chrome.storage.local.get('settings')).settings || {};
+      await chrome.storage.local.set({ settings: Object.assign({}, cur, { theme: '${theme}' }) });
+      return 'ok';
+    })()`);
+  };
+  // 镜像链路：settings.theme='follow-webui' + 写 webuiTheme 镜像（键名与契约一致）
+  const setPopupMirror = async (dark, port) => {
+    await evalPage(`(async () => {
+      const cur = (await chrome.storage.local.get('settings')).settings || {};
+      await chrome.storage.local.set({
+        settings: Object.assign({}, cur, { theme: 'follow-webui' }),
+        webuiTheme: { dark: ${dark}, at: Date.now(), port: ${port} },
+      });
+      return 'ok';
+    })()`);
+  };
+  const readPopupTheme = async () => {
+    const s = await evalPage(`(() => {
+      const cs = getComputedStyle(document.body);
+      return JSON.stringify({
+        hasAttr: document.body.hasAttribute('data-ds-dark-theme'),
+        bg: cs.backgroundColor,
+        bgBase: cs.getPropertyValue('--dsw-alias-bg-base').trim(),
+      });
+    })()`);
+    try { return JSON.parse(s); } catch (_) { return { hasAttr: false, bg: '', bgBase: '' }; }
+  };
+  const readPanelTheme = async () => {
+    const s = await evalPage(`(() => {
+      const h = document.getElementById('dsh-manager-panel-host');
+      if (!h || !h.shadowRoot) return JSON.stringify({ present: false });
+      const chip = h.shadowRoot.querySelector('.chip');
+      const btn = h.shadowRoot.querySelector('.btn');
+      return JSON.stringify({
+        present: true,
+        chipBg: getComputedStyle(chip).backgroundColor,
+        btnBg: getComputedStyle(btn).backgroundColor,
+      });
+    })()`);
+    try { return JSON.parse(s); } catch (_) { return { present: false }; }
+  };
+  const setPageDark = (dark) => evalPage(`(() => {
+    if (${dark}) document.body.setAttribute('data-ds-dark-theme', '');
+    else document.body.removeAttribute('data-ds-dark-theme');
+    return 'set';
+  })()`);
+  // storage 镜像侧属扩展上下文（content script 隔离世界写、SW 读）——dsh 页主世界里无
+  // chrome.storage，故经扩展 SW 读取 webuiTheme（SW 与内容脚本共享同一 chrome.storage.local 存储）
+  const readWebuiViaSw = async () => {
+    let tg = null;
+    try {
+      tg = (await fetchJson('http://127.0.0.1:' + PORT + '/json/list'))
+        .filter((t) => t.type === 'service_worker' && (t.url || '').includes(extId))[0];
+    } catch (_) { return { err: 'list-failed' }; }
+    if (!tg) return { err: 'no-sw-target' };
+    try {
+      const s = await connectWs(tg.webSocketDebuggerUrl);
+      await s.send('Runtime.enable');
+      const r = await s.send('Runtime.evaluate', {
+        expression: `(async () => { const d = await chrome.storage.local.get('webuiTheme'); return JSON.stringify(d.webuiTheme || null); })()`,
+        awaitPromise: true, returnByValue: true,
+      });
+      return r && r.result ? JSON.parse(String(r.result.value)) : null;
+    } catch (e) { return { err: e.message }; }
+  };
+  const emulateColorScheme = async (value) => {
+    try {
+      await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value }] });
+      return true;
+    } catch (e) { return false; }
+  };
+  const resetEmulation = async () => {
+    try { await page.send('Emulation.setEmulatedMedia', { media: '', features: [] }); } catch (_) { /* 忽略 */ }
+  };
+
+  // 11a) 面板深色跟随（§8.7.7 ③）：宿主 body[data-ds-dark-theme] 翻转后，
+  //      shadow 内面板令牌继承宿主 → chip 计算背景同步变化
+  //      注（2026-08-22 加固）：webui 主题偏好可能浅也可能深（真实环境状态），
+  //      前置断言不再硬编码「初始浅色」——改为「面板初始跟随宿主渲染态」；
+  //      深色翻转前先强制拉回浅色，保证「浅→深」翻转真实发生（原实现若首页已深，
+  //      翻转路径未被验证、且前置断言误败）。
+  log('面板深色跟随');
+  await gotoDsh();
+  let panelLight = { present: false };
+  try { panelLight = await readPanelTheme(); } catch (_) { /* 保持默认 */ }
+  const hostInitDark = await evalPage(`JSON.stringify(document.body.hasAttribute('data-ds-dark-theme'))`)
+    .then((v) => String(v) === 'true').catch(() => false);
+  record('主题：面板已注入（前置）', panelLight.present === true, JSON.stringify(panelLight));
+  record('主题：面板初始跟随宿主渲染态（浅/深按宿主实际）',
+    panelLight.present === true && (hostInitDark ? isDarkRgb(panelLight.chipBg) : panelLight.chipBg === LIGHT_BG),
+    'chipBg=' + panelLight.chipBg + ' hostDark=' + hostInitDark);
+  await setPageDark(false); // 先拉回浅色（宿主初始深色时亦然），确保下方翻转真实执行
+  await sleep(300);
+  await setPageDark(true);
+  await sleep(300); // CSS 变量继承即时生效，300ms 避免指针/transition 竞态
+  let panelDark = { present: false };
+  try { panelDark = await readPanelTheme(); } catch (_) { /* 保持默认 */ }
+  record('主题：面板深色跟随（chip 背景变深）',
+    panelDark.present === true && panelDark.chipBg !== LIGHT_BG && isDarkRgb(panelDark.chipBg),
+    'chipBg(深)=' + panelDark.chipBg + ' chipBg(浅)=' + panelLight.chipBg);
+  await setPageDark(false);
+  await sleep(300);
+  let panelRestore = { present: false };
+  try { panelRestore = await readPanelTheme(); } catch (_) { /* 保持默认 */ }
+  record('主题：面板恢复浅色（移除属性后 chip 背景还原）',
+    panelRestore.present === true && panelRestore.chipBg === LIGHT_BG,
+    'chipBg(恢复)=' + panelRestore.chipBg);
+
+  // 11b) storage 镜像写入（§8.7.7 ②/③ 的镜像写入侧）：page 翻转 body → content script
+  //      观察并写 chrome.storage.local.webuiTheme（幂等、带 at 时间戳、port 为面板页面端口）
+  log('storage 镜像写入（webuiTheme）');
+  await setPageDark(true);
+  await sleep(1200); // 等 panel.js MutationObserver 写镜像（≤1s 窗口）
+  let wDark = null;
+  try { wDark = await readWebuiViaSw(); } catch (_) { /* 保持 null */ }
+  record('主题：storage 镜像写入 webuiTheme(dark:true)',
+    wDark && wDark.dark === true && typeof wDark.port === 'number' && typeof wDark.at === 'number',
+    JSON.stringify(wDark));
+  await setPageDark(false);
+  await sleep(1200);
+  let wLight = null;
+  try { wLight = await readWebuiViaSw(); } catch (_) { /* 保持 null */ }
+  record('主题：storage 镜像更新 webuiTheme(dark:false)',
+    wLight && wLight.dark === false,
+    JSON.stringify(wLight));
+
+  // 11c) popup 四态主题（§8.7.7 ① ②）：设置 → 重载 → 断言，确定性路径
+  log('popup 深色/浅色/跟随系统/镜像链路');
+  await gotoPopup();
+
+  // -- dark：属性存在 + 背景深色；并存截图 popup-dark.png
+  await setPopupTheme('dark');
+  await gotoPopup();
+  let tDark = { hasAttr: false, bg: '' };
+  try { tDark = await readPopupTheme(); } catch (_) { /* 保持默认 */ }
+  record('主题：popup dark（属性 + 背景深色）',
+    tDark.hasAttr === true && isDarkRgb(tDark.bg),
+    JSON.stringify(tDark));
+  await shotPng('popup-dark.png');
+
+  // -- light：无属性 + 背景浅色
+  await setPopupTheme('light');
+  await gotoPopup();
+  let tLight = { hasAttr: false, bg: '' };
+  try { tLight = await readPopupTheme(); } catch (_) { /* 保持默认 */ }
+  record('主题：popup light（无属性 + 背景浅色）',
+    tLight.hasAttr === false && tLight.bg === LIGHT_BG,
+    JSON.stringify(tLight));
+
+  // -- 外观行：浅色选中态背景（bg-module-platform=bluish-60）与 radiogroup 键盘导航
+  // （回归守卫：选中态变量若是深色专用未定义，浅色下背景会回退 transparent）
+  let gridSelL = null;
+  try {
+    gridSelL = await evalPage(`(async () => {
+      document.getElementById('btn-settings').click();
+      await new Promise((r) => setTimeout(r, 300));
+      const el = document.querySelector('.theme-cube.selected');
+      const before = {
+        theme: el && el.getAttribute('data-theme'),
+        bg: el ? getComputedStyle(el).backgroundColor : '',
+        tab: el ? el.getAttribute('tabindex') : '',
+        checked: el ? el.getAttribute('aria-checked') : '',
+      };
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+      await new Promise((r) => setTimeout(r, 300));
+      const sel = document.querySelector('.theme-cube.selected');
+      const after = {
+        theme: sel && sel.getAttribute('data-theme'),
+        tab: sel ? sel.getAttribute('tabindex') : '',
+      };
+      return JSON.stringify({ before, after });
+    })()`);
+  } catch (_) { /* 保持 null */ }
+  const g2 = gridSelL ? JSON.parse(gridSelL) : null;
+  record('主题：浅色选中态背景（bg-module-platform 渲染）',
+    !!(g2 && g2.before.bg === 'rgb(245, 246, 247)' && g2.before.tab === '0' && g2.before.checked === 'true'),
+    gridSelL || 'evaluate failed');
+  record('主题：外观行键盘导航（ArrowRight 换选 + roving tabindex）',
+    !!(g2 && g2.after.theme === 'dark' && g2.after.tab === '0'),
+    gridSelL || 'evaluate failed');
+
+  // -- follow-system：CDP Emulation 翻转 prefers-color-scheme 断言跟随
+  await setPopupTheme('follow-system');
+  await gotoPopup();
+  const emuDark = await emulateColorScheme('dark');
+  await gotoPopup(); // 重载以确定性应用当前模拟系统偏好
+  let tSysDark = { hasAttr: false, bg: '' };
+  try { tSysDark = await readPopupTheme(); } catch (_) { /* 保持默认 */ }
+  record('主题：popup follow-system 深色跟随系统',
+    emuDark === true && tSysDark.hasAttr === true && isDarkRgb(tSysDark.bg),
+    'emuDark=' + emuDark + ' theme=' + JSON.stringify(tSysDark));
+  await emulateColorScheme('light');
+  await gotoPopup();
+  let tSysLight = { hasAttr: false, bg: '' };
+  try { tSysLight = await readPopupTheme(); } catch (_) { /* 保持默认 */ }
+  record('主题：popup follow-system 浅色跟随系统',
+    tSysLight.hasAttr === false && tSysLight.bg === LIGHT_BG,
+    'theme=' + JSON.stringify(tSysLight));
+  await resetEmulation();
+
+  // -- 镜像链路：settings.theme='follow-webui' + webuiTheme={dark,at,port}
+  await setPopupMirror(true, 3080);
+  await gotoPopup();
+  let tMirrorDark = { hasAttr: false, bg: '' };
+  try { tMirrorDark = await readPopupTheme(); } catch (_) { /* 保持默认 */ }
+  record('主题：popup 镜像链路(dark:true → 深色)',
+    tMirrorDark.hasAttr === true && isDarkRgb(tMirrorDark.bg),
+    JSON.stringify(tMirrorDark));
+  await setPopupMirror(false, 3080);
+  await gotoPopup();
+  let tMirrorLight = { hasAttr: false, bg: '' };
+  try { tMirrorLight = await readPopupTheme(); } catch (_) { /* 保持默认 */ }
+  record('主题：popup 镜像链路(dark:false → 浅色)',
+    tMirrorLight.hasAttr === false && tMirrorLight.bg === LIGHT_BG,
+    JSON.stringify(tMirrorLight));
+
+  // -- 回归浅色后存档 popup-light.png（§8.7.7 ④）
+  record('主题：深色段无新增 console 异常', consoleErrors.length === 0,
+    consoleErrors.length ? consoleErrors.join(' ||| ').slice(0, 800) : '');
+  await shotPng('popup-light.png');
+
+  // 12) M7 状态卡变体 + Matrix 动效 + 深/浅卡片背景（design §8.8）
+  //    popup.js 为经典 script：顶层 let state / function render() 在页面全局词法环境，
+  //    Runtime.evaluate 可直接读写/调用（确定性路径，不依赖真实状态；变体后恢复原状态，
+  //    popup 自身的 2s 轮询会以真实 status 覆盖显示，无副作用）。
+  log('M7 状态卡变体 + 状态点动效（§8.8）');
+  consoleErrors.length = 0; // M7 段专用收集
+  const m7Variants = await evalPage(`(() => {
+    const snap = () => {
+      const c = document.getElementById('statuscard');
+      if (!c) return { present: false };
+      const dot = document.getElementById('dot');
+      const word = document.getElementById('state-word');
+      return {
+        present: true,
+        cls: c.className,
+        word: word ? word.textContent : '',
+        dot: dot ? dot.className : '',
+        hasMatrix: dot ? !!dot.querySelector('.matrix') : false,
+        // 实心点（:after）呼吸 = 运行态；busy = 琥珀脉冲；光晕（:before）呼吸同步
+        breathe: dot ? getComputedStyle(dot, '::after').animationName : '',
+        halo: dot ? getComputedStyle(dot, '::before').animationName : '',
+        border: getComputedStyle(c).borderColor,
+        wordColor: word ? getComputedStyle(word).color : '',
+      };
+    };
+    const orig = { state: state, startedAtMs: startedAtMs };
+    const out = {};
+    state = 'running'; render(); out.running = snap();
+    state = 'external'; render(); out.external = snap();
+    state = 'starting'; render(); out.starting = snap();
+    state = 'stopping'; render(); out.stopping = snap();
+    state = 'error'; render(); out.error = snap();
+    state = 'stopped'; render(); out.stopped = snap();
+    state = orig.state; startedAtMs = orig.startedAtMs; render();
+    return JSON.stringify(out);
+  })()`);
+  let m7v = {};
+  try { m7v = JSON.parse(m7Variants); } catch (_) { /* 保持默认 */ }
+  const v = m7v || {};
+  const okv = (o) => !!(o && o.present === true);
+  record('M7：running 状态词「运行中」+ 绿点 + 实心点呼吸',
+    okv(v.running) && v.running.word === '运行中' && v.running.dot === 'dot dot-running'
+      && v.running.breathe === 'dsh-dot-breathe' && v.running.halo === 'dsh-halo-breathe',
+    JSON.stringify(v.running));
+  record('M7：external 状态词「外部实例」+ 蓝点',
+    okv(v.external) && v.external.word === '外部实例' && v.external.dot === 'dot dot-external', JSON.stringify(v.external));
+  record('M7：starting 状态词「正在启动…」+ 琥珀状态词 + 琥珀脉冲（无矩阵）',
+    okv(v.starting) && v.starting.word === '正在启动…' && v.starting.dot === 'dot dot-busy'
+      && v.starting.wordColor === 'rgb(221, 134, 41)' && v.starting.hasMatrix === false
+      && v.starting.breathe === 'dsh-dot-pulse',
+    JSON.stringify(v.starting));
+  record('M7：stopping 状态词「正在停止…」+ 琥珀脉冲（无矩阵）',
+    okv(v.stopping) && v.stopping.word === '正在停止…' && v.stopping.dot === 'dot dot-busy'
+      && v.stopping.hasMatrix === false && v.stopping.breathe === 'dsh-dot-pulse',
+    JSON.stringify(v.stopping));
+  record('M7：error 红调卡（.error + 红边框 + 红状态词）',
+    okv(v.error) && /\berror\b/.test(v.error.cls) && v.error.border === 'rgba(236, 19, 19, 0.25)'
+      && v.error.wordColor === 'rgb(236, 19, 19)' && v.error.word === '状态获取失败',
+    JSON.stringify(v.error));
+  record('M7：stopped 状态词「已停止」+ 灰点',
+    okv(v.stopped) && v.stopped.word === '已停止' && v.stopped.dot === 'dot dot-stopped', JSON.stringify(v.stopped));
+
+  // 深/浅状态卡背景：深色 bg-module-platform=bluish-800（#353638），浅色=bluish-60（#f5f6f7）
+  await setPopupTheme('dark');
+  await gotoPopup();
+  const m7Dark = await evalPage(`(() => {
+    const c = document.getElementById('statuscard');
+    if (!c) return JSON.stringify({ present: false });
+    return JSON.stringify({ present: true, bg: getComputedStyle(c).backgroundColor });
+  })()`);
+  let m7d = { present: false };
+  try { m7d = JSON.parse(m7Dark); } catch (_) { /* 保持默认 */ }
+  record('M7：深色状态卡背景（bg-module-platform=bluish-800 #353638）',
+    m7d.present === true && m7d.bg === 'rgb(53, 54, 56)', 'bg=' + m7d.bg);
+  await setPopupTheme('light');
+  await gotoPopup();
+  const m7Light2 = await evalPage(`(() => {
+    const c = document.getElementById('statuscard');
+    if (!c) return JSON.stringify({ present: false });
+    return JSON.stringify({ present: true, bg: getComputedStyle(c).backgroundColor });
+  })()`);
+  let m7l2 = { present: false };
+  try { m7l2 = JSON.parse(m7Light2); } catch (_) { /* 保持默认 */ }
+  record('M7：浅色状态卡背景（bluish-60 = #f5f6f7）',
+    m7l2.present === true && m7l2.bg === 'rgb(245, 246, 247)', 'bg=' + m7l2.bg);
+  record('M7：变体与主题段无新增 console 异常', consoleErrors.length === 0,
+    consoleErrors.length ? consoleErrors.join(' ||| ').slice(0, 800) : '');
+  await shotPng('popup-m7.png');
 
   await cleanup();
   const failed = results.filter((r) => !r.ok);

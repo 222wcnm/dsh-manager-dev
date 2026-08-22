@@ -53,12 +53,18 @@
   --dsw-alias-interactive-bg-hover-danger: rgba(236, 19, 19, 0.05);
   --dsw-alias-brand-primary: var(--dsw-static-neutral-bluish-1000);
   --dsw-alias-button-primary-hover: var(--dsw-static-neutral-bluish-750);
+  --dsw-alias-button-primary-fill: var(--dsw-static-neutral-bluish-1000);
+  --dsw-alias-label-primary-foreground: var(--dsw-static-neutral-bluish-00);
+  --dsw-alias-bg-module-platform: var(--dsw-static-neutral-bluish-60); /* 浅色选中态底（webui 浅色 alias 同值） */
   --dsw-alias-state-business-primary: var(--dsw-static-deepseek-500);
   --dsw-alias-state-success-primary: var(--dsw-static-green-500);
   --dsw-alias-state-warn-primary: var(--dsw-static-amber-500);
   --dsw-alias-state-warn-label: var(--dsw-static-amber-600);
   --dsw-alias-state-error-primary: var(--dsw-static-red-600);
   --dsw-state-ongoing: var(--dsw-static-deepseek-450);
+  /* 阴影令牌（浅深通用，与 webui 同策略不随主题翻转；popup 浮层强度为自定值） */
+  --dsw-shadow-lv1: 0 2px 4px rgba(15, 17, 21, 0.05);
+  --dsw-shadow-lv2: 0 6px 24px rgba(15, 17, 21, 0.12);
   --ds-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ds-transition-duration-fast: 0.1s;
   --ds-transition-duration: 0.2s;
@@ -80,18 +86,56 @@ body {
 }
 
 .panel {
-  padding: 12px;
+  padding: 16px 14px 12px;
 }
 
 .hidden {
   display: none !important;
 }
 
-/* ---- 状态行 ---- */
-.status-row {
+/* ---- ① 应用栏 ---- */
+.appbar {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-bottom: 12px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+
+.brand .whale {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--dsw-alias-label-primary);
+}
+
+.brand-name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.brand-tag {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-caption);
+  /* 浅色=bluish-60（同 mockup）；深色随 alias 翻转为 bluish-800，避免深底白球 */
+  background: var(--dsw-alias-bg-module-platform);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
 }
 
 /* 分层圆点：复刻 Web UI _dot 组件（外圈 10% 光晕 + 内实心） */
@@ -133,6 +177,31 @@ body {
 .dot-external { color: var(--dsw-alias-state-business-primary); }
 .dot-error { color: var(--dsw-alias-state-error-primary); }
 
+/* 运行态呼吸（design §8.8：用户偏好——光晕太难观察，呼吸作用于实心点 + 光晕同步；
+   实心点 opacity .5↔1 + scale .88↔1（肉眼可见的脉动），光晕 .08↔.16；
+   浅深通用；prefers-reduced-motion 全局块关闭；仅 running/external） */
+@keyframes dsh-dot-breathe {
+  0%, 100% { opacity: 0.5; transform: scale(0.88); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes dsh-halo-breathe {
+  0%, 100% { opacity: 0.08; }
+  50% { opacity: 0.16; }
+}
+
+.dot-running:after,
+.dot-external:after {
+  animation: dsh-dot-breathe 2.2s var(--ds-ease-in-out) infinite;
+}
+
+.dot-running:before,
+.dot-external:before {
+  animation: dsh-halo-breathe 2.2s var(--ds-ease-in-out) infinite;
+}
+
+/* busy（starting/stopping/操作在途）：琥珀脉冲——webui 点阵语义为「长时进行中的会话工作」，
+   扩展 busy 是秒级过渡态，语义不匹配故不使用（design §8.8.1 撤销注记，2026-08-22） */
 .dot-busy {
   color: var(--dsw-alias-state-warn-primary);
 }
@@ -146,24 +215,69 @@ body {
   animation: dsh-dot-pulse 1.2s var(--ds-ease-in-out) infinite;
 }
 
-.title {
-  flex: 1;
+/* ---- ② 状态卡 ---- */
+.statuscard {
+  background: var(--dsw-alias-bg-module-platform);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.statuscard .sc-row1 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 状态词 + 圆点（左） */
+.state-word {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
+  font-size: 13px;
   font-weight: 500;
-  font-size: 14px;
-  line-height: 24px;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 端口（右）：business 蓝 + tabular-nums */
+.sc-port {
+  flex: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dsw-alias-state-business-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 次级信息行 */
+.sc-row2 {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-caption);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* 品牌鲸鱼 logo（内联 SVG 取自 Web UI 侧栏左上角，182×24） */
-.brand-logo {
-  height: 18px;
-  width: auto;
-  flex: none;
-  color: var(--dsw-alias-label-primary);
+/* 状态变体：warn（busy）→ 状态词琥珀 */
+.statuscard.warn .state-word {
+  color: var(--dsw-alias-state-warn-label);
 }
+
+/* 状态变体：error → 红调卡片 */
+.statuscard.error {
+  border-color: rgba(236, 19, 19, 0.25);
+}
+
+.statuscard.error .state-word {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* （§8.8.1 Matrix 点阵动效已撤销，2026-08-22：webui 点阵语义=长时进行中的会话工作，
+   扩展 busy=秒级过渡态，语义不匹配；busy 统一用上方琥珀脉冲。原始提取物见 git 历史。 */
 
 /* 图标按钮（ghost，与 Web UI hHd-Xa_iconButton 一致） */
 .icon-btn {
@@ -205,37 +319,39 @@ body {
   cursor: progress;
 }
 
+.icon-btn.is-pending:disabled {
+  opacity: 1;
+}
+
 .icon-btn.is-pending .icon-refresh {
   animation: dsh-spin 0.8s linear infinite;
 }
 
-/* ---- URL 行 ---- */
-.url-row {
+/* ---- ③ 操作区 ---- */
+.ops {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
+  flex-direction: column;
   gap: 8px;
-  margin: 4px 0 0 18px;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  margin-bottom: 12px;
 }
 
-.url-text {
-  color: var(--dsw-alias-state-business-primary);
-  word-break: break-all;
-}
-
-.uptime-text {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  color: var(--dsw-alias-label-caption);
+.oprow {
+  display: flex;
+  gap: 8px;
 }
 
 /* ---- 按钮（与 Web UI Button 组件同风格） ---- */
-.btn-row {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
+/* 全宽 ghost 按钮（打开 Web UI）：bluish-60 底 + business 蓝字，flex:1 占满 */
+.btn.ghost {
+  background: var(--dsw-alias-bg-module-platform);
+  border-color: var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-state-business-primary);
+  font-weight: 500;
+  flex: 1;
+}
+
+.btn.ghost:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .btn {
@@ -293,6 +409,11 @@ body {
   cursor: progress;
 }
 
+/* 忙碌中的按钮不被 disabled 灰化：转圈即状态，保持全亮 */
+.btn.is-pending:disabled {
+  opacity: 1;
+}
+
 .btn.is-pending .spinner {
   display: inline-block;
   animation: dsh-spin 0.8s linear infinite;
@@ -302,10 +423,11 @@ body {
   to { transform: rotate(360deg); }
 }
 
-/* 主按钮：品牌黑底白字（--dsw-alias-brand-primary），字重与 Web UI 主按钮一致 */
+/* 主按钮：品牌底 + 前景字。浅色=近黑底白字；深色（body[data-ds-dark-theme]）
+   alias 翻转后 fill=近白、foreground=深字（与 webui 主按钮同策略，design §8.7.6-2）。 */
 .btn.primary {
-  background: var(--dsw-alias-brand-primary);
-  color: var(--dsw-static-neutral-bluish-00);
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
   font-weight: 500;
 }
 
@@ -334,34 +456,12 @@ body {
   background: var(--dsw-alias-interactive-bg-hover-danger);
 }
 
-/* 链接感按钮（打开 Web UI）：业务蓝字描边 */
-.btn.link {
-  background: var(--dsw-alias-bg-base);
-  border-color: var(--dsw-alias-border-l2);
-  color: var(--dsw-alias-state-business-primary);
-}
-
-.btn.link:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.btn.wide {
-  flex: 1;
-}
-
 .btn.small {
   flex: none;
   height: 28px;
   padding: 4px 10px;
   font-size: 12px;
   margin-top: 8px;
-}
-
-/* ---- 状态明细 ---- */
-.detail {
-  margin-top: 10px;
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 12px;
 }
 
 /* ---- 操作进度（点击后乐观反馈） ---- */
@@ -406,8 +506,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* 面板/行淡入（URL 行、错误面板、设置面板出现时） */
-.url-row:not(.hidden),
+/* 面板淡入（错误面板、设置面板出现时） */
 .error:not(.hidden),
 .settings:not(.hidden) {
   animation: dsh-fade-in var(--ds-transition-duration) var(--ds-ease-in-out);
@@ -426,7 +525,7 @@ body {
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-1);
-  box-shadow: 0 6px 24px rgba(15, 17, 21, 0.12);
+  box-shadow: var(--dsw-shadow-lv2, 0 6px 24px rgba(15, 17, 21, 0.12));
   color: var(--dsw-alias-label-primary);
   font-size: 12px;
   line-height: 1.4;
@@ -493,26 +592,40 @@ body {
   word-break: break-all;
 }
 
-/* ---- 底部提示 + 日志入口（M3） ---- */
-.hint-row {
+/* ---- ④ 底栏：提示 + 日志入口 ---- */
+.foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 12px;
-  padding-top: 8px;
   border-top: 1px solid var(--dsw-alias-border-l1);
+  padding-top: 10px;
+  margin-top: 2px;
 }
 
-.hint {
+.foot .hint {
   flex: 1;
   min-width: 0;
   color: var(--dsw-alias-label-caption);
   font-size: 11px;
 }
 
-.btn.hint-logs {
-  margin-top: 0;
+/* 「查看日志」link：12px business 蓝，hover 浅底 */
+.link {
+  flex: none;
+  font-size: 12px;
+  color: var(--dsw-alias-state-business-primary);
+  background: none;
+  border: none;
+  font-family: var(--dsw-font-family);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.link:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 /* ---- 设置面板 ---- */
@@ -527,6 +640,19 @@ body {
 .settings-title {
   font-weight: 500;
   margin-bottom: 8px;
+}
+
+/* 设置分组标题（服务 / 界面）：11px / 500 caption 色 + 组间距 12 */
+.s-group {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-caption);
+  margin: 12px 0 6px;
+  letter-spacing: 0.3px;
+}
+
+.s-group:first-of-type {
+  margin-top: 0;
 }
 
 .field {
@@ -598,4 +724,102 @@ body {
   display: flex;
   gap: 8px;
   margin-top: 4px;
+}
+
+/* ---- 外观行（M6，复刻 Web UI AppearanceRow themeCube，design §8.7.5） ---- */
+/* 外观行独占：仅 popup.css（logs 页无此 UI）。label 置顶 + 下方 2×2 网格。 */
+.field.label-top {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+
+.theme-cube {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 16px;
+  background: none;
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-family);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out),
+    border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out),
+    transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.theme-cube:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.theme-cube:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.theme-cube:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.theme-cube svg {
+  flex: none;
+}
+
+.theme-cube.selected {
+  background: var(--dsw-alias-bg-module-platform);
+  border-color: var(--dsw-static-neutral-bluish-400);
+}
+
+/* ---- 深色主题（M6）----
+ * 令牌块取自 tools/ui-theme/dsw-tokens-dark.css（webui 权威存档），值与 webui 逐字一致。
+ * color-scheme: dark 使原生 checkbox/number spinner 在扩展页内正确变深（webui 未声明，
+ * 浏览器默认随系统；扩展页显式声明）。
+ */
+
+/* 深色 static 色板（逐字，勿改值） */
+body[data-ds-dark-theme]{--dsw-static-amber-100:#fef5e7;--dsw-static-amber-400:#f7ad31;--dsw-static-amber-500:#f59e0b;--dsw-static-amber-600:#dd8629;--dsw-static-amber-900:#27241f;--dsw-static-blue-100:#dbeafe;--dsw-static-blue-300:#93c5fd;--dsw-static-blue-400:#60a5fa;--dsw-static-blue-450:#4d93f8;--dsw-static-blue-500:#3b82f6;--dsw-static-blue-50:#eff6ff;--dsw-static-blue-50p:#eaf3ff;--dsw-static-blue-600:#2563eb;--dsw-static-blue-75:#e5f0ff;--dsw-static-blue-800:#1e40af;--dsw-static-blue-900:#0e3074;--dsw-static-blue-950:#172554;--dsw-static-deepseek-100:#e4edfd;--dsw-static-deepseek-200:#d3e2ff;--dsw-static-deepseek-300:#b7c8fe;--dsw-static-deepseek-400:#679efe;--dsw-static-deepseek-450:#5686fe;--dsw-static-deepseek-500:#4176e6;--dsw-static-deepseek-50:#edf3fe;--dsw-static-deepseek-600:#4868b2;--dsw-static-deepseek-700-delete:#2f4c8f;--dsw-static-deepseek-800:#34415b;--dsw-static-deepseek-900:#283142;--dsw-static-green-100:#e6faed;--dsw-static-green-400:#4ed17e;--dsw-static-green-500:#22c55e;--dsw-static-green-900:#233c2c;--dsw-static-neutral-00:#fff;--dsw-static-neutral-1000:#000;--dsw-static-neutral-100:#f5f5f5;--dsw-static-neutral-150:#ededed;--dsw-static-neutral-200:#e5e5e5;--dsw-static-neutral-250:#dcdcdc;--dsw-static-neutral-300:#d4d4d4;--dsw-static-neutral-400:#a2a4a6;--dsw-static-neutral-500:#7f8287;--dsw-static-neutral-50:#fafafa;--dsw-static-neutral-550:#65676b;--dsw-static-neutral-600:#545557;--dsw-static-neutral-700:#3c3c3d;--dsw-static-neutral-800:#292929;--dsw-static-neutral-850:#212123;--dsw-static-neutral-900:#0f0f0f;--dsw-static-neutral-bluish-00:#fff;--dsw-static-neutral-bluish-1000:#0f1115;--dsw-static-neutral-bluish-100:#ebeef2;--dsw-static-neutral-bluish-150:#e9ecf2;--dsw-static-neutral-bluish-200:#e1e5ee;--dsw-static-neutral-bluish-300:#cfd3d6;--dsw-static-neutral-bluish-400:#adb2b8;--dsw-static-neutral-bluish-500:#979da6;--dsw-static-neutral-bluish-50:#f9fafb;--dsw-static-neutral-bluish-600:#81858c;--dsw-static-neutral-bluish-60:#f9fafb;--dsw-static-neutral-bluish-700:#61666b;--dsw-static-neutral-bluish-750:#43454a;--dsw-static-neutral-bluish-75:#f1f3f5;--dsw-static-neutral-bluish-800:#353638;--dsw-static-neutral-bluish-850:#2c2c2e;--dsw-static-neutral-bluish-875:#232324;--dsw-static-neutral-bluish-900:#1b1b1c;--dsw-static-neutral-bluish-950:#151517;--dsw-static-red-100:#fee2e2;--dsw-static-red-400:#f25a5a;--dsw-static-red-500:#ef4444;--dsw-static-red-50:#fef2f2;--dsw-static-red-600:#ec1313;--dsw-static-red-900:#570c0c;color-scheme:dark}
+
+/* 深色 alias 层（含 specific，逐字，勿改值） */
+body[data-ds-dark-theme]{--dsw-alias-bg-base:var(--dsw-static-neutral-bluish-950);--dsw-alias-bg-layer-1:var(--dsw-static-neutral-bluish-875);--dsw-alias-bg-layer-2:var(--dsw-static-neutral-bluish-850);--dsw-alias-bg-layer-3:var(--dsw-static-neutral-bluish-800);--dsw-alias-bg-mask-1:#00000080;--dsw-alias-bg-mask-2:#0003;--dsw-alias-bg-mask-3:#0000007a;--dsw-alias-bg-mask-photo:#000000e0;--dsw-alias-bg-mask-drop:#272730b3;--dsw-alias-bg-module-platform:var(--dsw-static-neutral-bluish-800);--dsw-alias-bg-multi-select:var(--dsw-static-neutral-850);--dsw-alias-bg-overlay:var(--dsw-static-neutral-bluish-700);--dsw-alias-bg-skeleton:#ffffff14;--dsw-alias-border-inverted2:#ffffff14;--dsw-alias-border-inverted:#ffffff0f;--dsw-alias-border-l1:#ffffff0f;--dsw-alias-border-l2-darkmode-thin:#ffffff0f;--dsw-alias-border-l2:#ffffff1f;--dsw-alias-border-l3:#ffffff29;--dsw-alias-border-l4:#fff3;--dsw-alias-brand-primary-invert:var(--dsw-static-neutral-bluish-50);--dsw-alias-brand-primary-new-colorprimary-new-color:var(--dsw-static-deepseek-450);--dsw-alias-brand-primary:var(--dsw-static-neutral-bluish-50);--dsw-alias-brand-text:var(--dsw-static-neutral-bluish-50);--dsw-alias-button-contrast-fill:var(--dsw-static-neutral-bluish-50);--dsw-alias-button-elevated-fill:var(--dsw-static-neutral-bluish-750);--dsw-alias-button-floating-fill:var(--dsw-static-neutral-bluish-850);--dsw-alias-button-floating-hover:var(--dsw-static-neutral-bluish-800);--dsw-alias-button-ghost-active-border:var(--dsw-static-neutral-bluish-600);--dsw-alias-button-ghost-active-fill:var(--dsw-static-neutral-bluish-750);--dsw-alias-button-ghost-active-hover:var(--dsw-static-neutral-bluish-700);--dsw-alias-button-info-fill:var(--dsw-static-deepseek-400);--dsw-alias-button-info-hover:var(--dsw-static-deepseek-500);--dsw-alias-button-primary-dimmed:var(--dsw-static-neutral-bluish-750);--dsw-alias-button-primary-fill:var(--dsw-alias-brand-primary);--dsw-alias-button-primary-hover:var(--dsw-static-neutral-bluish-100);--dsw-alias-button-tool-bar-fill-invisible:#1f1f1f5c;--dsw-alias-button-tool-bar-fill:#54555780;--dsw-alias-button-tool-bar-hover:#54555799;--dsw-alias-interactive-bg-active:#ffffff24;--dsw-alias-interactive-bg-hover-accent:#ffffff3d;--dsw-alias-interactive-bg-hover-danger:#f25a5a26;--dsw-alias-interactive-bg-hover-solid:var(--dsw-static-neutral-bluish-800);--dsw-alias-interactive-bg-hover:#ffffff14;--dsw-alias-label-caption:var(--dsw-static-neutral-bluish-600);--dsw-alias-label-dimmed:var(--dsw-static-neutral-bluish-750);--dsw-alias-label-primary-bluish:var(--dsw-static-neutral-bluish-50);--dsw-alias-label-primary-dimmed:var(--dsw-static-neutral-bluish-100);--dsw-alias-label-primary-foreground:var(--dsw-static-neutral-bluish-1000);--dsw-alias-label-primary-inverted:var(--dsw-static-neutral-bluish-800);--dsw-alias-label-primary:var(--dsw-static-neutral-bluish-50);--dsw-alias-label-secondary:var(--dsw-static-neutral-bluish-300);--dsw-alias-label-tertiary:var(--dsw-static-neutral-bluish-400);--dsw-alias-markdown-citation:var(--dsw-static-neutral-bluish-800);--dsw-alias-markdown-code-block-banner:var(--dsw-static-neutral-bluish-850);--dsw-alias-markdown-code-block:var(--dsw-static-neutral-bluish-900);--dsw-alias-markdown-code-segment-selected:var(--dsw-static-neutral-bluish-800);--dsw-alias-markdown-code-segment-unselected:var(--dsw-static-neutral-bluish-900);--dsw-alias-markdown-inline-code:var(--dsw-static-neutral-bluish-850);--dsw-alias-markdown-placeholder:var(--dsw-static-neutral-bluish-850);--dsw-alias-markdown-tag:var(--dsw-static-neutral-bluish-850);--dsw-alias-scrollbar-bg-l1:var(--dsw-static-neutral-700);--dsw-alias-scrollbar-bg-l2:var(--dsw-static-neutral-600);--dsw-alias-scrollbar-hover-l1:var(--dsw-static-neutral-600);--dsw-alias-scrollbar-hover-l2:var(--dsw-static-neutral-550);--dsw-alias-state-business-primary:var(--dsw-static-deepseek-400);--dsw-alias-state-business-tertiary:var(--dsw-static-deepseek-800);--dsw-alias-state-error-primary:var(--dsw-static-red-400);--dsw-alias-state-error-secondary:var(--dsw-static-red-400);--dsw-alias-state-success-primary:var(--dsw-static-green-500);--dsw-alias-state-success-secondary:var(--dsw-static-green-400);--dsw-alias-state-success-tertiary:var(--dsw-static-green-900);--dsw-alias-state-warn-label:var(--dsw-static-amber-600);--dsw-alias-state-warn-primary:var(--dsw-static-amber-500);--dsw-alias-state-warn-secondary:var(--dsw-static-amber-400);--dsw-alias-state-warn-tertiary:var(--dsw-static-amber-900);--dsw-alias-toast-bg:var(--dsw-static-neutral-bluish-750);--dsw-alias-tooltip-bg:var(--dsw-static-neutral-bluish-750);--dsw-specific-bubble-highlight:var(--dsw-static-neutral-bluish-750);--dsw-specific-bubble:var(--dsw-static-neutral-bluish-850);--dsw-specific-input-major:var(--dsw-static-neutral-bluish-850);--dsw-specific-login-input:var(--dsw-static-neutral-bluish-900);--dsw-specific-menu:var(--dsw-alias-bg-layer-3);--dsw-specific-selector:var(--dsw-static-neutral-bluish-800);--dsw-specific-sidebar-fill:var(--dsw-static-neutral-bluish-900);--dsw-specific-sidebar-nav-item-active-accent:var(--dsw-static-neutral-bluish-800);--dsw-specific-sidebar-nav-item-active:var(--dsw-static-neutral-bluish-750);--dsw-specific-sidebar-nav-item-hover:var(--dsw-static-neutral-bluish-850);--dsw-specific-tip:var(--dsw-static-neutral-bluish-800);color-scheme:dark}
+
+/* ---- 深色下的硬编码浅色覆盖（design §8.7.6-3）---- */
+body[data-ds-dark-theme] .error {
+  background: var(--dsw-static-red-900);
+  border-color: rgba(242, 90, 90, 0.35);
+}
+
+body[data-ds-dark-theme] .field input.field-invalid {
+  box-shadow: 0 0 0 2px rgba(242, 90, 90, 0.2);
+}
+
+/* toast 三色变体：浅色视觉不变（浅色 id 走上一段的硬编码值）；
+   深色下换 --dsw-alias-toast-bg / deepseek 系 + 对应 state 文字色。 */
+body[data-ds-dark-theme] .toast-success {
+  background: var(--dsw-alias-toast-bg);
+  color: var(--dsw-alias-state-success-secondary);
+  border-color: rgba(78, 209, 126, 0.35);
+}
+
+body[data-ds-dark-theme] .toast-error {
+  background: var(--dsw-alias-toast-bg);
+  color: var(--dsw-alias-state-error-primary);
+  border-color: rgba(242, 90, 90, 0.35);
+}
+
+body[data-ds-dark-theme] .toast-info {
+  background: var(--dsw-static-deepseek-800);
+  color: var(--dsw-static-deepseek-400);
+  border-color: rgba(103, 158, 254, 0.35);
 }

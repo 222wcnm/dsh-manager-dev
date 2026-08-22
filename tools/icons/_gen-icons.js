@@ -26,17 +26,22 @@ const CHROME_CANDIDATES = [
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
 ];
 
-// 渲染页模板：鲸鱼 SVG 铺满方形画布，背景透明
+// 渲染页模板：品牌深底（#0F1115，圆角 22%）+ 白色鲸鱼铺满方形画布，背景透明。
+// 深底白鲸与 webui 深色主题侧栏鲸鱼同款；弥补透明图标「内容 88%×63%、上下留白 37%、
+// 无底色」导致的工具栏视觉偏小/利用率低（2026-08-22 用户实测观察；相邻 KT/猫等
+// 图标均为满铺色块）。whale.svg 源保持不变，仅注入时替换 fill 为白色。
 const PAGE_TPL = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
-  svg { display: block; width: 100%; height: 100%; }
+  .bg { position: absolute; inset: 0; background: #0F1115; border-radius: 22%; }
+  svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
+<div class="bg"></div>
 {{WHALE}}
 </body>
 </html>`;
@@ -149,8 +154,10 @@ async function main() {
   const chromePath = CHROME_CANDIDATES.find((p) => fs.existsSync(p));
   if (!chromePath) throw new Error('未找到 Chrome/Edge');
 
-  // 运行时生成渲染页（whale.svg 注入模板，落到 %TEMP%）
-  const whale = fs.readFileSync(path.join(ROOT, 'tools', 'icons', 'whale.svg'), 'utf8').trim();
+  // 运行时生成渲染页（whale.svg 注入模板，落到 %TEMP%；品牌深底 → 白鲸，见 PAGE_TPL 注释）
+  const whale = fs.readFileSync(path.join(ROOT, 'tools', 'icons', 'whale.svg'), 'utf8')
+    .trim()
+    .replace('fill="#0F1115"', 'fill="#FFFFFF"');
   const pageHtml = PAGE_TPL.replace('{{WHALE}}', whale);
   const srcHtml = path.join(os.tmpdir(), 'dsh-manager-icon-source.html');
   fs.writeFileSync(srcHtml, pageHtml, 'utf8');
