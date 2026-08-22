@@ -59,6 +59,32 @@ let toastTimer = null;
 let refreshing = false; // 手动刷新在途：btn-refresh 转圈 + 禁用，防止重入
 let lastDriftKey = null; // 上次状态漂移提示的键（相同漂移去重）
 
+// M9 会话区（design §8.10）：只读摘要元数据（{available, items}），不读消息内容。
+// sessionsData===null 表示尚未拿到数据或请求失败（会话区隐藏）。
+let sessionsData = null;
+
+// 会话状态展示层（§8.10 色表，扩展 §8.9.1 紫语义）：
+// 琥珀=进行中 / 紫=等你拍板 / 绿=已完成 / 灰=空闲；文字状态词恒有（防颜色混淆硬规则）
+const SESSION_STATE_META = {
+  working: { cls: 'sdot-working', label: '进行中' },
+  waiting: { cls: 'sdot-waiting', label: '等你拍板' },
+  completed: { cls: 'sdot-completed', label: '已完成' },
+  idle: { cls: 'sdot-idle', label: '空闲' },
+};
+
+// 呼吸同步（2026-08-23 用户反馈：呼吸效果整个 popup 同步）：
+// 以 popup 打开时刻为全局时钟零点，每个呼吸点（状态卡 running/external + 会话四态）
+// 渲染时设置负 animation-delay（--dot-align-delay：out 至伪元素）折算回同一相位——
+// CSS 动画从元素插入时刻起算，后渲染的点会晚走一段（不同步），负 delay 则等效于
+// 「从 popup 打开（零点）就开始播放」。周期须与 popup.css 的 dsh-dot-breathe /
+// dsh-halo-breathe 2.2s 一致。busy 脉冲（1.2s 秒级过渡态）不参与对齐。
+const BREATHE_MS = 2200;
+const BREATHE_T0 = performance.now();
+function alignBreathe(el) {
+  const elapsed = (performance.now() - BREATHE_T0) % BREATHE_MS;
+  el.style.setProperty('--dot-align-delay', '-' + Math.round(elapsed) + 'ms');
+}
+
 // ---------------------------------------------------------------------------
 // 初始化
 // ---------------------------------------------------------------------------
@@ -69,6 +95,7 @@ async function init() {
   await loadSettings();
   renderSettingsForm();
   await refreshStatus();
+  refreshSessions(); // M9：会话摘要（只读，失败静默降级）
   pollTimer = setInterval(refreshStatus, 2000);
   tickTimer = setInterval(() => {
     renderUptime();
@@ -97,6 +124,15 @@ function bindEvents() {
   });
   // radiogroup 键盘导航（roving tabindex + 方向键/Home/End）
   $('theme-grid').addEventListener('keydown', onThemeGridKeydown);
+  // M9 会话区：折叠头（可折叠、默认展开）。会话行为**纯展示**（2026-08-23 修复误导：
+  // Web UI 无 URL 会话深链，行点击只能打开实例首页且恢复"上次选中会话"——点某行却进
+  // 另一会话，构成误导；导航交互收回给明确语义的「打开 Web UI」按钮；深链见 §8.10 规划）。
+  $('sessions-toggle').addEventListener('click', () => {
+    const section = $('sessions-section');
+    const collapsed = section.classList.toggle('collapsed');
+    const btn = $('sessions-toggle');
+    if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  });
   window.addEventListener('unload', () => {
     if (pollTimer) clearInterval(pollTimer);
     if (tickTimer) clearInterval(tickTimer);
@@ -141,6 +177,7 @@ async function refreshStatus() {
   if (pending && pending.atMs > reqAt) return;
   clearError();
   applyStatus(resp.result || {});
+  if (state === 'running' || state === 'external') refreshSessions(); // M9：随状态轮询刷新会话摘要
 }
 
 // 手动刷新：直接拉取一次 status 并应用结果（与 refreshStatus 一致）。
@@ -254,6 +291,100 @@ function finishPending(msg, kind) {
   if (msg) showToast(msg, kind);
 }
 
+// 失败静默：会话区隐藏而非报错（§8.10：不阻断其余功能，除降级提示外不打扰）
+async function refreshSessions() {
+  let resp;
+  try {
+    resp = await nativeRequest('sessions', {});
+  } catch (_) {
+    sessionsData = null;
+    applySessions();
+    return;
+  }
+  if (!resp.ok || !resp.result || typeof resp.result !== 'object') {
+    sessionsData = null;
+    applySessions();
+    return;
+  }
+  sessionsData = {
+    available: resp.result.available === true,
+    items: Array.isArray(resp.result.items) ? resp.result.items : [],
+  };
+  applySessions();
+}
+
+// 会话区渲染：折叠头计数 + 列表 / 空态 / 降级提示（§8.10）
+function applySessions() {
+  const section = $('sessions-section');
+  if (!section) return;
+  const list = $('sessions-list');
+  const empty = $('sessions-empty');
+  const hint = $('sessions-hint');
+  const count = $('sessions-count');
+
+  // 未加载 / 失败 / dsh 未运行 -> 整个会话区隐藏（不报错）；
+  // 顺手清空计数与列表残留，避免恢复显示前闪现陈旧行
+  if (!sessionsData) {
+    section.classList.add('hidden');
+    if (count) count.textContent = '';
+    return;
+  }
+  const dshOff = state === 'stopped' || state === 'error' || state === 'unknown';
+  if (!sessionsData.available) {
+    // 插件未装/未升级：dsh 在运行时给中性提示，未运行时隐藏
+    if (dshOff) {
+      section.classList.add('hidden');
+    } else {
+      section.classList.remove('hidden');
+      list.classList.add('hidden');
+      empty.classList.add('hidden');
+      hint.classList.remove('hidden');
+      hint.textContent = '安装/升级 dsh 配套插件后可查看会话';
+      count.textContent = '';
+    }
+    return;
+  }
+
+  const items = sessionsData.items;
+  section.classList.remove('hidden');
+  hint.classList.add('hidden');
+  count.textContent = items.length > 0 ? String(items.length) : '';
+
+  if (items.length === 0) {
+    list.classList.add('hidden');
+    empty.classList.remove('hidden');
+    empty.textContent = '暂无会话';
+    return;
+  }
+
+  empty.classList.add('hidden');
+  list.classList.remove('hidden');
+  list.textContent = '';
+  for (const item of items) {
+    const meta = SESSION_STATE_META[item.state] || SESSION_STATE_META.idle;
+    const title = (typeof item.title === 'string' && item.title)
+      ? item.title
+      : '会话 #' + String(item.sessionId || '').slice(0, 8);
+    const row = document.createElement('div');
+    row.className = 'session-row';
+    // 纯展示：无 role/tabindex/点击语义（见 bindEvents 注记；深链规划于 §8.10）
+    const dot = document.createElement('span');
+    dot.className = 'session-dot ' + meta.cls;
+    dot.setAttribute('aria-hidden', 'true');
+    alignBreathe(dot); // 全 popup 呼吸点同步（折算回 popup 打开时刻）
+    const titleEl = document.createElement('span');
+    titleEl.className = 'session-title';
+    titleEl.textContent = title;
+    const stateEl = document.createElement('span');
+    stateEl.className = 'session-state';
+    stateEl.textContent = meta.label; // 文字状态词恒有（防颜色混淆硬规则）
+    row.appendChild(dot);
+    row.appendChild(titleEl);
+    row.appendChild(stateEl);
+    list.appendChild(row);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 操作（启动 / 停止 / 重启 / 接管）
 // ---------------------------------------------------------------------------
@@ -365,7 +496,14 @@ function render() {
   const locked = !!pending; // 操作在途：所有生命周期按钮锁定，防止并发
 
   // 状态圆点（dotStateClass 集中映射语义 class：running/z/error/stopped + busy 走 Matrix）
-  $('dot').className = 'dot ' + dotStateClass();
+  // className 变更才重设 + alignBreathe：每 2s 轮询 render 不改 delay（className 相同
+  // 时 animation 不重启；改 delay 反而会触发动画重算导致跳变）
+  const dotEl = $('dot');
+  const dotCls = 'dot ' + dotStateClass();
+  if (dotEl.className !== dotCls) {
+    dotEl.className = dotCls;
+    if (/dot-(running|external)/.test(dotCls)) alignBreathe(dotEl); // 呼吸全 popup 同步
+  }
 
   // 按钮随状态启用/禁用：external 可接管 + 打开 Web UI（design §6.6/§6.7）
   // error 态保留「启动」重试入口（修复端口/安装 dsh 后可直接重试，design §8.2.12）
@@ -390,6 +528,9 @@ function render() {
   // 状态卡（新三区布局）：状态词 / 端口 / 次级信息行
   renderStatusCard();
   renderLegacyStatus(); // 兼容：继续写入隐藏的 url-text/uptime-text/detail-line（保留 id 契约）
+
+  // M9 会话区：状态变化时按现有 sessionsData 收敛显示（隐藏/提示切换）
+  applySessions();
 
   // 底部提示：M2 契约 —— lifecycle:true 显示优雅停机已启用
   renderHint();

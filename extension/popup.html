@@ -35,6 +35,20 @@
       <div id="row2-text" class="sc-row2">正在获取状态…</div>
     </div>
 
+    <!-- ②.5 会话区（M9：状态卡下、操作区上，可折叠、默认展开；只读摘要元数据，不读内容） -->
+    <section id="sessions-section" class="sessions hidden" aria-label="会话">
+      <button id="sessions-toggle" class="sessions-head" type="button" aria-expanded="true" aria-controls="sessions-body">
+        <span class="sessions-title">会话</span>
+        <span id="sessions-count" class="sessions-count"></span>
+        <svg class="sessions-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div id="sessions-body" class="sessions-body">
+        <div id="sessions-list" class="sessions-list hidden"></div>
+        <div id="sessions-empty" class="sessions-empty hidden"></div>
+        <div id="sessions-hint" class="sessions-hint hidden"></div>
+      </div>
+    </section>
+
     <!-- ③ 操作区 -->
     <div class="ops">
       <div class="oprow">

@@ -1129,6 +1129,163 @@ async function main() {
     consoleErrors.length ? consoleErrors.join(' ||| ').slice(0, 800) : '');
   await shotPng('popup-m7.png');
 
+  // 13) M9 会话区（design §8.10）：mock sessionsData（popup.js 顶层 let，可读写）→
+  //     渲染/状态圆点色表/标题降级/空态/降级提示/折叠/行点击（chrome.tabs.create spy）
+  log('M9 会话区（§8.10）');
+  const m9Raw = await evalPage(`(async () => {
+    const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => res())));
+    const snap = () => {
+      const section = document.getElementById('sessions-section');
+      if (!section) return { present: false };
+      const list = document.getElementById('sessions-list');
+      const empty = document.getElementById('sessions-empty');
+      const hint = document.getElementById('sessions-hint');
+      const count = document.getElementById('sessions-count');
+      const rows = [...(list ? list.querySelectorAll('.session-row') : [])].map((row) => {
+        const dot = row.querySelector('.session-dot');
+        return {
+          title: row.querySelector('.session-title') ? row.querySelector('.session-title').textContent : '',
+          state: row.querySelector('.session-state') ? row.querySelector('.session-state').textContent : '',
+          dot: dot ? dot.className : '',
+          dotColor: dot ? getComputedStyle(dot).color : '',
+          dotAnim: dot ? getComputedStyle(dot, '::after').animationName : '',
+          dotHalo: dot ? getComputedStyle(dot, '::before').animationName : '',
+          dotHaloOpacity: dot ? getComputedStyle(dot, '::before').opacity : '',
+        };
+      });
+      return {
+        present: true,
+        hidden: section.classList.contains('hidden'),
+        collapsed: section.classList.contains('collapsed'),
+        expanded: document.getElementById('sessions-toggle')
+          ? document.getElementById('sessions-toggle').getAttribute('aria-expanded') : '',
+        count: count ? count.textContent : '',
+        listHidden: list ? list.classList.contains('hidden') : true,
+        emptyHidden: empty ? empty.classList.contains('hidden') : true,
+        emptyText: empty ? empty.textContent : '',
+        hintHidden: hint ? hint.classList.contains('hidden') : true,
+        hintText: hint ? hint.textContent : '',
+        rows,
+        phases: (() => {
+          // effect 进度（getComputedTiming：activeTime = localTime - delay，负 delay 包含在内）
+          // —— 验证全 popup 呼吸点同相位；currentTime 本身不含 delay 偏置，不可直接用
+          try {
+            const arr = [];
+            for (const a of document.getAnimations()) {
+              if (!a || !a.effect || !a.effect.getComputedTiming) continue;
+              const ct = a.effect.getComputedTiming();
+              if (ct.iterations !== Infinity) continue;
+              if (a.animationName === 'dsh-dot-breathe') {
+                arr.push({ p: ct.progress, t: ct.localTime, d: ct.delay });
+              }
+            }
+            return arr;
+          } catch (e) { return [{ err: String(e) }]; }
+        })(),
+      };
+    };
+    const out = {};
+    const origState = state;
+    const origData = sessionsData;
+    // 1) 初始（sessionsData=null）→ 会话区隐藏（不报错）
+    sessionsData = null; state = 'running'; render(); await frame(); out.initial = snap();
+    // 2) 四态渲染 + 无 title 降级为「会话 #<id 前8>」
+    sessionsData = {
+      available: true,
+      items: [
+        { sessionId: 'session-working-1', title: '正在推进的会话', state: 'working', updatedAt: 1, blank: false },
+        { sessionId: 'session-waiting-1', title: '等你拍板', state: 'waiting', updatedAt: 2, blank: false },
+        { sessionId: 'session-completed-1', title: '已完成会话', state: 'completed', updatedAt: 3, blank: false },
+        { sessionId: 'session-idle-1', title: '空闲', state: 'idle', updatedAt: 4, blank: false },
+        { sessionId: 'session-untitled-abcdef12', state: 'idle', updatedAt: 5, blank: false },
+      ],
+    };
+    render(); await frame(); out.filled = snap();
+    // 3) 空态（available:true 无会话）
+    sessionsData = { available: true, items: [] };
+    render(); await frame(); out.empty = snap();
+    // 4) 降级：available:false + running → 中性提示；stopped → 隐藏
+    sessionsData = { available: false, items: [] };
+    state = 'running'; render(); await frame(); out.degradeRunning = snap();
+    state = 'stopped'; render(); await frame(); out.degradeStopped = snap();
+    // 5) 折叠：默认展开，点击头折叠（aria-expanded 同步），再点恢复
+    sessionsData = { available: true, items: [{ sessionId: 's-collapse-1', title: '折叠测试', state: 'idle', updatedAt: 6 }] };
+    state = 'running'; render(); await frame();
+    const toggle = document.getElementById('sessions-toggle');
+    if (toggle) toggle.click();
+    await frame(); out.collapsed = snap();
+    if (toggle) toggle.click();
+    await frame(); out.expandedAgain = snap();
+    // 6) 行纯展示回归（2026-08-23：Web UI 无 URL 会话深链，行点击会进错会话——移除点击
+    //    interaction；断言：行无 role=button/tabindex、点击行不触发 chrome.tabs.create）
+    const origCreate = chrome.tabs.create;
+    let created = 0;
+    chrome.tabs.create = () => { created += 1; return Promise.resolve(); };
+    const row = document.querySelector('.session-row');
+    const role = row ? row.getAttribute('role') : '';
+    const tabIndex = row ? row.getAttribute('tabindex') : '';
+    if (row) row.click();
+    chrome.tabs.create = origCreate;
+    out.rowNoClick = { created, role, tabIndex, hasPointer: row ? getComputedStyle(row).cursor === 'pointer' : false };
+    // 恢复现场
+    sessionsData = origData; state = origState; render();
+    return JSON.stringify(out);
+  })()`);
+  let m9 = {};
+  try { m9 = JSON.parse(m9Raw); } catch (_) { /* 保持默认 */ }
+  const m9ok = (o) => !!(o && o.present === true);
+  record('M9：sessionsData 空（初始/失败）时会话区隐藏（计数同时清空）',
+    m9ok(m9.initial) && m9.initial.hidden === true && m9.initial.count === '',
+    JSON.stringify(m9.initial));
+  record('M9：四态会话渲染（计数 + 行标题与文字状态词 + 圆点色表）',
+    m9ok(m9.filled) && m9.filled.hidden === false && m9.filled.count === '5'
+      && m9.filled.rows.length === 5
+      && m9.filled.rows[0].state === '进行中' && m9.filled.rows[0].dotColor === 'rgb(221, 134, 41)'
+      && m9.filled.rows[1].state === '等你拍板' && m9.filled.rows[1].dotColor === 'rgb(139, 92, 246)'
+      && m9.filled.rows[2].state === '已完成' && m9.filled.rows[2].dotColor === 'rgb(34, 197, 94)'
+      && m9.filled.rows[3].state === '空闲' && m9.filled.rows[3].dot === 'session-dot sdot-idle',
+    JSON.stringify(m9.filled && m9.filled.rows));
+  record('M9：会话指示灯四态全呼吸 + 光晕分层（用户决策 2026-08-23：各状态都呼吸、补光晕）',
+    m9ok(m9.filled) && m9.filled.rows.length === 5
+      && m9.filled.rows[0].dotAnim === 'dsh-dot-breathe'
+      && m9.filled.rows[1].dotAnim === 'dsh-dot-breathe'
+      && m9.filled.rows[2].dotAnim === 'dsh-dot-breathe'
+      && m9.filled.rows[3].dotAnim === 'dsh-dot-breathe'
+      && m9.filled.rows[0].dotHalo === 'dsh-halo-breathe'
+      && m9.filled.rows[3].dotHalo === 'dsh-halo-breathe'
+      && parseFloat(m9.filled.rows[0].dotHaloOpacity) >= 0.08
+      && parseFloat(m9.filled.rows[0].dotHaloOpacity) <= 0.16,
+    JSON.stringify(m9.filled && m9.filled.rows.map((r) => ({ s: r.state, a: r.dotAnim, h: r.dotHalo, ho: r.dotHaloOpacity }))));
+  record('M9：呼吸全 popup 同步（状态卡与会话点 effect 进度同相位，差 <0.045≈100ms）',
+    (() => {
+      const ps = (m9ok(m9.filled) && m9.filled.phases) || [];
+      const ok = ps.filter((v) => v && typeof v.p === 'number' && v.p !== null);
+      if (ok.length < 2) return false;
+      return Math.max(...ok.map((v) => v.p)) - Math.min(...ok.map((v) => v.p)) < 0.045;
+    })(), 'phases=' + JSON.stringify(m9ok(m9.filled) ? m9.filled.phases : m9.filled));
+  record('M9：无 title 会话降级为「会话 #<id 前 8>」',
+    m9ok(m9.filled) && m9.filled.rows[4].title === '会话 #session-',
+    JSON.stringify(m9.filled && m9.filled.rows[4]));
+  record('M9：available 且无会话 → 空态「暂无会话」',
+    m9ok(m9.empty) && m9.empty.hidden === false && m9.empty.emptyHidden === false
+      && m9.empty.emptyText === '暂无会话' && m9.empty.listHidden === true,
+    JSON.stringify(m9.empty));
+  record('M9：插件不可用降级（运行中 → 中性提示，未运行 → 隐藏）',
+    m9ok(m9.degradeRunning) && m9.degradeRunning.hidden === false
+      && m9.degradeRunning.hintHidden === false
+      && m9.degradeRunning.hintText === '安装/升级 dsh 配套插件后可查看会话'
+      && m9ok(m9.degradeStopped) && m9.degradeStopped.hidden === true,
+    JSON.stringify(m9.degradeRunning) + ' / ' + JSON.stringify(m9.degradeStopped));
+  record('M9：会话区可折叠（chevron 翻转 + aria-expanded 同步）',
+    m9ok(m9.collapsed) && m9.collapsed.collapsed === true && m9.collapsed.expanded === 'false'
+      && m9ok(m9.expandedAgain) && m9.expandedAgain.collapsed === false
+      && m9.expandedAgain.expanded === 'true',
+    JSON.stringify(m9.collapsed) + ' / ' + JSON.stringify(m9.expandedAgain));
+  record('M9：会话行纯展示（无 role=button/tabindex/pointer，点击不打开标签页——防误导回归）',
+    !!m9.rowNoClick && m9.rowNoClick.created === 0 && m9.rowNoClick.role === null
+      && m9.rowNoClick.tabIndex === null && m9.rowNoClick.hasPointer === false,
+    JSON.stringify(m9.rowNoClick));
+
   await cleanup();
   const failed = results.filter((r) => !r.ok);
   log('=== 汇总 ===  PASS ' + (results.length - failed.length) + ' / FAIL ' + failed.length);

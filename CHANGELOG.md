@@ -5,6 +5,27 @@
 
 ## [未发布] - M4 跨平台/跨浏览器（进行中）
 
+### Added
+- **扩展能力边界规范（2026-08-23 文档，design §8.11）**：防「喧宾夺主」——扩展只做四象限（生命周期管理 / 状态情报（摘要层） / 快速入口 / 安全护栏），明确六条红线（不做会话内容与会话内操作、不替 dsh 做配置与编排、不做完整状态镜像、不碰凭据数据、不越权管理任意进程/端口）与「三问」立项自检准则；后续新功能须先过本节边界对照。
+- **M10 颜色语义自定义（2026-08-23 规划，design §8.12）**：设置「颜色语义」区——`waiting/done/working/completed/idle` 五角色可改（error 红与字符语义锁定；撞色提示不硬拦），`settings.colorMap` 全域生效（popup/面板/logs/徽标，统一走语义 CSS 变量）；**规划调整（用户决策）：表内默认色均为提案值，最终预设色板待自定义设置实现、实际体验调色后确定**——M10 先交付完整自定义能力，体验后回填定稿值（含 working 双载体统一色提案：徽标蓝 #5686fe ↕ popup 会话区琥珀 → 统一 webui 蓝，待体验对比后定）。
+- **M11 项目更名（2026-08-23 规划，design §15.1）**：一期显示品牌（manifest/README/popup/GitHub 仓库名；扩展 key 不变则 ID 不变）+ 二期全量更名（`com.dsh.manager` 协议名、注册表键、状态目录、`DSH_MANAGER_*` 钩子与代码标识，含迁移/卸载兼容）；上架前必须完成；命名候选 **Whalekeeper（鲸守）已确认为候选（2026-08-23 用户认可）**（Portwatch/Loopkeeper 备选），待最终定名。
+- **M9 扩展面板会话状态（2026-08-23，design §8.10）**：popup 新增「会话」区（状态卡下、
+  操作区上，可折叠默认展开）——显示扩展管理实例的 live 会话摘要（**只读元数据，不读消息
+  内容**）：标题 + 状态圆点色表（琥珀=进行中 / 紫=等你拍板（§8.9.1 紫语义）/ 绿=已完成 /
+  灰=空闲，恒带文字状态词防颜色混淆）+ 计数；行点击打开该实例 Web UI（**2026-08-23 M9 修补：
+  已改为纯展示**——Web UI 无会话深链，点击进错会话构成误导；导航收回给「打开 Web UI」按钮，
+  深链列为规划，见 Fixed 段）。链路：dsh-lifecycle
+  插件新增只读端点 `GET /_manager/sessions`（lifecycle 同款回环围栏；title 从 `session/title`
+  事件 fold，state 由事件流判定——`approval/asked`↔`decided` 配对、`tool/call`
+  (ask_user_question)↔`tool/result` 配对）→ 宿主新增只读 `sessions` 动作（1.5s 端点超时，
+  不可用即降级 `{available:false}`）→ SW 8s 兜底 → popup 渲染。降级：插件未装/未升级时
+  运行中给中性提示、未运行隐藏；无会话显示空态。**M9.1 spike 结论**（host 侧全部信号
+  权威可读，无需依赖 apiproxy 内部状态）；`background.js` ACTION_TIMEOUT_MS 增
+  `sessions: 8000`。验收：插件单测 **29/29**（新增 8 项）、宿主 smoke **356 / FAIL 0 / SKIP 1**
+  （新增场景 28 共 9 断言）、verify-cdp **82 / FAIL 0**（新增 M9 段 8 断言）、真实实例
+  e2e **7/7**（真实 dsh 0.1.1-rc.2 + 真实 profile 装配：端点 200/403/405、available:true、
+  优雅停机无回归；本机 `.dsh\plugins\dsh-lifecycle` 已升级并保留 `.bak-m9` 备份）。
+
 ### Changed
 - **M8.1 徽标语义重构（2026-08-22 用户决策，design §8.9/§8.9.1）**：原「实例运行状态」与
   「会话提醒」挤在同一徽标字符且互斥覆盖（显示「?」看不到实例状态；实例停止后紫?/琥珀!
@@ -44,6 +65,22 @@
   `opacity:1`），spinner 全程全亮；design §8.2 行为规范新增第 12 条按钮状态矩阵。
 
 ### Fixed
+- **M9 会话行交互误导（2026-08-23 用户实机反馈）**：会话区行的「点击 → 打开该实例 Web UI」
+  被实测误导——Web UI **无 URL 会话深链**（打开后恢复 localStorage 的「上次选中会话」），
+  点击 A 行首屏却展示另一会话（点 B 进 A）；**行为修订：会话行纯展示**（移除
+  role=button/tabindex/pointer 与点击监听，verify-cdp 断言同步改为「点击行不触发
+  chrome.tabs.create（防误导回归）」），导航交互收回给语义明确的「打开 Web UI」按钮；
+  「会话深链」列为规划（待 Web UI 支持 URL 定位后行点击带 sessionId 打开指定会话，
+  属 §8.11 快速入口象限）。design §8.10 已修订。
+- **M9 会话指示灯呼吸（2026-08-23 用户实机反馈，两次修订）**：① 会话区圆点原为纯静态 →
+  补呼吸动画；② 用户拍板定稿：**四态全呼吸 2.2s**（各颜色/状态都呼吸，动画仅辅助，文字
+  状态词仍为主语义）+ **呼吸全 popup 同步**（popup.js 以打开时刻为时钟零点，渲染时负
+  `animation-delay`（`--dot-align-delay`）折算回零点相位，实测 effect 进度差 <8ms）+
+  **会话点补光晕层**（复刻 `.dot` 分层圆点组件：外圈 10% 光晕 + 内实心，光晕同步呼吸；
+  尺寸与实例点统一 10px——M9 初版 8px 为次级元素旧尺寸，升级同款组件后统一）。
+  `prefers-reduced-motion` 由全局块关闭。verify-cdp 新增 2 条断言（四态全呼吸+光晕分层、
+  全 popup 相位同步——用 `effect.getComputedTiming().progress` 度量，currentTime 不含
+  delay 偏置不可直接用），全量 **PASS 84 / FAIL 0**；design §8.10 已修订为定稿规则。
 - **M6 盲审修复（2026-08-22 独立审查后）**：① 浅色主题 `.theme-cube.selected`
   选中背景改用 `--dsw-alias-bg-module-platform` 但浅色 `:root` 未定义该变量 → 浅色下
   选中态无背景（回退 transparent），`:root` 补浅色定义（bluish-60，webui 同值）；

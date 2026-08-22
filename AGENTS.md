@@ -13,7 +13,7 @@
 ## 目录
 
 - `extension/` — Chrome MV3 扩展，原生 JS 零依赖（manifest.json 含固定 key → 扩展 ID `dahcfklamlpgkngijomlnoclclfodkjm`；background.js 串行 native 调用+徽标；popup.*；logs.*（M3 日志查看页）；content/panel.js（M3 页面内管理面板，content script + Shadow DOM））
-- `native-host/` — `host.js` 零依赖 CJS 宿主（stdio 4 字节帧 + `--req/--res` 文件模式）；`install.ps1`/`uninstall.ps1`（Windows）；`install.sh`/`uninstall.sh`（Linux/macOS，M4，用户级 NativeMessagingHosts 清单）；`test/`（smoke.js、fake-dsh.js、smoke-real.js）
+- `native-host/` — `host.js` 零依赖 CJS 宿主（stdio 4 字节帧 + `--req/--res` 文件模式）；`install.ps1`/`uninstall.ps1`（Windows）；`install.sh`/`uninstall.sh`（Linux/macOS，M4，用户级 NativeMessagingHosts 清单）；`test/`（smoke.js、fake-dsh.js、smoke-real.js、e2e-m9-manager.js（M9 真实实例 e2e，真实 profile 插件装配））
 - `plugin/` — M2 起：dsh-lifecycle 插件
 - `tools/` — 开发期工具：`visual-audit/`（视觉审计）、`icons/`（图标生成）、`verify-ui/`（扩展 UI 自动验收：`verify-cdp.js` 沙箱内可用零依赖 CDP；`verify-ui.js` MCP 路径需沙箱外）
 - `docs/` — 设计文档、接手说明
@@ -24,11 +24,12 @@
 node --check native-host/host.js                     # 宿主语法检查
 node native-host/test/smoke.js                       # 冒烟测试 27 场景（本机：Windows 347 PASS+1 SKIP——场景 26 POSIX；Linux 337 PASS+1 SKIP——场景 27 载体为 Windows 专属；全新克隆：Windows 332 PASS+4 SKIP——3 项本地产物核对跳过；BASE_ENV 进程枚举围栏仅 Windows 生效——场景 26 在 POSIX 不注入任何钩子走真实 /proc 平台层）
 node native-host/test/smoke-real.js                  # 真实 dsh 集成（需 DSH_MANAGER_NPM_PREFIX=%APPDATA%\npm）
-node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（21 项）
+node native-host/test/e2e-m9-manager.js              # M9 真实实例 e2e（真实 profile 插件装配；插件未升级时 SKIP；需 danger-full-access）
+node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（29 项）
 powershell -ExecutionPolicy Bypass -File native-host\install.ps1 -DryRun   # 安装预演（Windows）
 sh native-host/install.sh --dry-run                                          # 安装预演（Linux/macOS）
 powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E  # WSL Linux 冒烟 + 真实安装 E2E
-node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 74 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 面板体验回归（托管绿点+端口、展开时胶囊位置不变、面板在胶囊上方、扩展重载后旧面板提示刷新/刷新恢复） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + M8/M8.1 徽标提醒（SW 分层 done「!」/ waiting「?」/ 蓝 n 工作中计数 / 9+ 边界 / done>working 优先级 / 清空恢复 + 角标断言（icon 状态 + title）+ e2e 后台页注入等待标记 → 紫「?」→ 切回标签自动清除）+ 主题与深色断言（面板深色跟随、storage 镜像写入、popup 四态 + Emulation 系统模拟、深色段无新增 console 异常）+ M7 断言（状态卡结构/文案、状态变体（running 实心点呼吸 / external / busy 琥珀脉冲无矩阵 / error 红调卡 / stopped 灰点）、深/浅状态卡背景（深=#353638 精确值）、面板呼吸动画）+ console 异常检查）
+node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 84 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 面板体验回归（托管绿点+端口、展开时胶囊位置不变、面板在胶囊上方、扩展重载后旧面板提示刷新/刷新恢复） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + M8/M8.1 徽标提醒（SW 分层 done「!」/ waiting「?」/ 蓝 n 工作中计数 / 9+ 边界 / done>working 优先级 / 清空恢复 + 角标断言（icon 状态 + title）+ e2e 后台页注入等待标记 → 紫「?」→ 切回标签自动清除）+ 主题与深色断言（面板深色跟随、storage 镜像写入、popup 四态 + Emulation 系统模拟、深色段无新增 console 异常）+ M7 断言（状态卡结构/文案、状态变体（running 实心点呼吸 / external / busy 琥珀脉冲无矩阵 / error 红调卡 / stopped 灰点）、深/浅状态卡背景（深=#353638 精确值）、面板呼吸动画）+ M9 断言（会话区初始隐藏、四态渲染+圆点色表（琥珀/紫/绿/灰）、title 降级「会话 #id 前8」、空态、插件不可用降级、折叠 aria、行纯展示（点击不打开标签页防误导回归）、四态全呼吸+光晕分层、全 popup 呼吸相位同步）+ console 异常检查）
 node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome-devtools-mcp，需沙箱外）
 ```
 
@@ -43,6 +44,47 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
 
 ## 当前状态与路线
 
+- **规划（2026-08-23 用户提出，已定稿于 design.md）**：① **扩展能力边界规范（§8.11）**——防「喧宾夺主」：扩展只做四象限（生命周期管理 / 状态情报（摘要） / 快速入口 / 安全护栏），六条红线（不做会话内容与会话内操作、不替 dsh 配置编排、不做完整状态镜像、不碰凭据与数据、不越权管理任意进程端口）+ 三问准则 + 体积/权限纪律；**新增功能先过本节对照**。② **M10 颜色语义自定义（§8.12）**——`waiting/done/working/completed/idle` 五角色可改（error 红与字符语义锁定），`settings.colorMap` 全域生效；**规划调整（2026-08-23 用户决策）：默认色均为提案值，最终预设色板待 M10 实现、用户实际体验调色后确定**——先交付完整自定义能力，体验后回填定稿值（working 双载体统一色提案 webui 蓝同样待体验后定）。③ **M11 项目更名（§15.1）**——名字太朴实；命名候选 **Whalekeeper/鲸守 已确认为候选（2026-08-23 用户认可）**（Portwatch/Loopkeeper 备选）；一期显示品牌（manifest/README/popup/GitHub 仓库名，key 不变则扩展 ID 不变）+ 二期全量更名（`com.dsh.manager` 协议名、注册表、状态目录、`DSH_MANAGER_*` 钩子，含迁移/卸载兼容）；**Chrome Web Store 上架前必须完成**；待最终定名（冲突核查 + 中文副名「鲸守」确认）。
+- **M9 扩展面板会话状态（2026-08-23 完成，design §8.10）**：popup「会话」区（状态卡下、
+  操作区上，可折叠默认展开）展示扩展管理实例的 **live 会话摘要（只读元数据，不读消息内容）**：
+  标题 + 状态圆点色表（琥珀=进行中 / 紫=等你拍板（§8.9.1 紫语义）/ 绿=已完成 / 灰=空闲，
+  恒带文字状态词防颜色混淆）+ 计数；行**纯展示**（无点击交互，见 M9 修补）。链路四层：① **dsh-lifecycle
+  插件**（M9.2）新增只读端点 `GET /_manager/sessions`（lifecycle 同款 `allow()` 围栏 + 405；
+  title 从 `session/title` 事件 fold——不依赖 sessionTitle 服务；state 由事件流判定：
+  `approval/asked`↔`approval/decided`（id 配对，apiproxy 同款回扫）、`tool/call`
+  (name=ask_user_question)↔`tool/result`（callId 配对）；`agents.get(id).status==='running'`
+  →working；有 `turn/end`→completed；其余 idle；v1 只列 live 会话）；② **host**（M9.3a）
+  新增只读 `sessions` 动作：readRunRecord→`getManagerSessions(port,1500)`（HTTP 200+json.ok+
+  items 数组才通，≤128KB），不可用一律 `{available:false,items:[]}` 不抛错，items 上限 50；
+  ③ **SW**：泛化 native 路由零改动，`ACTION_TIMEOUT_MS` 增 `sessions: 8000`；④ **popup**
+  （M9.3b）：会话区 HTML/CSS（`--dsw-*` 令牌；新增 `--dsw-static-violet-500:#8b5cf6`（浅/深
+  两套已定义，徽标紫同源））+ `refreshSessions()`（随 2s 轮询、仅 running/external 拉取，
+  失败静默）+ `applySessions()`（null→隐藏；不可用且运行中→「安装/升级 dsh 配套插件后可
+  查看会话」、未运行→隐藏；空→「暂无会话」）。**M9.1 spike 结论**：host 侧全部信号权威
+  可读（sessions.list / agents.status / session/title 事件 / approval·question 事件对），
+  webui 的 pendingInteraction 是客户端帧跟踪，插件改用等价事件流判定，不依赖 apiproxy
+  内部状态；**D1=扩展现有 dsh-lifecycle 包**。验收：插件单测 **29/29**（新增 8 项）；
+  宿主 smoke **356 / FAIL 0 / SKIP 1**（场景 28 新增 9 断言）；verify-cdp **82 / FAIL 0**
+  （M9 段 8 断言：初始隐藏、四态渲染+圆点色、title 降级「会话 #id 前 8」、空态、降级提示、
+  折叠 aria、行点击 chrome.tabs.create spy）；真实实例 e2e **7/7**（`e2e-m9-manager.js`：
+  真实 dsh **0.1.1-rc.2**——事实基线已从 0.1.0-rc.6 漂移（用户已升级，design §2 待同步）+
+  真实 profile web 装配，临时端口 31998 + 隔离 BASE：端点 200/403/405、available:true、
+  lifecycle/优雅停机无回归；真实 DSH_HOME 只读行为）。**本机插件已升级**（
+  `%USERPROFILE%\.dsh\plugins\dsh-lifecycle\index.js` ← 新版，原版备份 `index.js.bak-m9`）。
+  已知局限（低）：v1 只列 live 会话；plan-review 归入 waiting 不细分（契约 4 态）；
+  verify M9 段为 mock 注入（真实状态流转由插件单测覆盖）。**M9 修补（2026-08-23 用户实机
+  反馈）**：会话行原「点击 → 打开该实例 Web UI」构成误导——Web UI 无 URL 会话深链
+  （打开后恢复 localStorage「上次选中会话」），点 B 行却进 A 会话；**行改为纯展示**
+  （无 role/tabindex/pointer/点击，verify-cdp 断言同步改为「点击不触发 tabs.create 防
+  误导回归」），导航由「打开 Web UI」按钮承担；「会话深链」列为规划（待 Web UI 支持
+  URL 定位后行点击带 sessionId 打开指定会话，属 §8.11 快速入口象限；design §8.10 修订）。
+  **M9 修补二（2026-08-23 用户实机反馈，两次修订定稿）**：会话指示灯呼吸——① 补呼吸；
+  ② **四态全呼吸 2.2s**（各颜色/状态都呼吸：动画仅辅助，文字状态词仍主语义）+
+  **呼吸全 popup 同步**（popup.js 以打开时刻为时钟零点，渲染时负 animation-delay
+  （`--dot-align-delay`）折算回零点相位；实测 effect 进度差 <8ms）+ **会话点补光晕层**
+  （复刻 `.dot` 分层圆点：外圈 10% 光晕 + 内实心，光晕同步呼吸；尺寸与实例点统一 10px——M9 初版 8px 为次级元素旧尺寸）；verify-cdp 新增 2 条
+  断言（四态全呼吸+光晕、全 popup 相位同步——用 `effect.getComputedTiming().progress`
+  度量），全量 **PASS 84 / FAIL 0**；design §8.10 已修订为定稿规则。
 - **M8 徽标提醒「该点回来看看了」（2026-08-22，design §8.9）**：
   解决「用户不驻守 dsh 标签」场景——dsh 页面在后台时，会话状态变化经工具栏徽标提醒：
   一轮工作完成 → 琥珀「!」（`#f59e0b`）；随时等待拍板（批准/问答/计划审查）→ 紫「?」

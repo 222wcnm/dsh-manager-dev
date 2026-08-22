@@ -14,6 +14,7 @@ tools/visual-audit/shots/*.png
 tools/verify-ui/shots/*
 .smoke/
 .smoke-real/
+.e2e-m9/
 .review/
 
 # ---- 扩展 ID / 安装副产物（可由 keygen.js / compute-id.js / install.ps1 现场生成）----
