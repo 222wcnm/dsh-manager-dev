@@ -60,6 +60,7 @@
   优雅停机无回归；本机 `.dsh\plugins\dsh-lifecycle` 已升级并保留 `.bak-m9` 备份）。
 
 ### Changed
+- **README 图文更新（2026-08-25，随 v0.2.1 发布）**：README 对齐当前现状——新增 V6 popup 三视图截图（概览/会话/设置）+ 深色主题图（公开安全的 mock 会话数据，复现脚本 `tools/ui-theme/capture-readme-shots.js`，须全权限运行 headless Chrome）；功能清单（V6 导轨/会话四态/徽标分层/颜色角色/主题四态）、配置表（完成会话保留时长、工作完成提醒独立开关）与测试环境（97 断言/33 单测）同步；构建者信息补充 deepseek-v4-flash-vision-exp 与 gemini-3.7-flash（UI 视觉优化辅助）。
 - **M9 会话区「进行中」圆点颜色变更（M10/M10.1，2026-08-24）**：§8.12 语义色统一——popup 会话区 `sdot-working` 由 `--dsw-alias-state-warn-label`（琥珀）改为 `--dsh-mgr-sem-working`（webui 蓝 `#5686fe`，**定稿值**）；「等你拍板」紫→琥珀黄 `#f59e0b` 并改词「待确认」；徽标「!」琥珀→绿 `#22c55e`（done 并入 completed 色）；**idle 不渲染**；verify-cdp M8/M9/M10 段断言同步更新。
 - **M8.1 徽标语义重构（2026-08-22 用户决策，design §8.9/§8.9.1）**：原「实例运行状态」与
   「会话提醒」挤在同一徽标字符且互斥覆盖（显示「?」看不到实例状态；实例停止后紫?/琥珀!
