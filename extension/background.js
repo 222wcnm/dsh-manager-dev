@@ -158,13 +158,25 @@ function pruneAttention(map) {
 }
 
 // 聚合（多 dsh 标签全局）：waiting > done（最新）> working（计数合计）> null（安静）
+// 2026-08-24 修复（同实例多标签重复计数）：attentionMap 是 tab 维度，而同一实例
+// （相同端口）常被多个标签同时打开——各标签独立上报会被重复累加（「徽标蓝 2、
+// popup 会话区进行中 1」类不一致）。聚合前先按端口归并：同端口只保留 at 最新的
+// 条目；idle（无信号）不参与同端口竞争（保持「空=安静」语义）；无端口条目
+// （外部/旧数据兼容）按 tab 独立参与。
 function pickAggregate() {
-  let waitingAny = false;
-  let doneAt = 0;
-  let workingSum = 0;
+  const byPort = new Map(); // key -> {kind, working, waiting, at}
   for (const key of Object.keys(attentionCache)) {
     const e = attentionCache[key];
     if (!e) continue;
+    if (e.kind === 'idle') continue;
+    const k = (Number.isInteger(e.port) && e.port > 0) ? 'p' + e.port : 't' + key;
+    const prev = byPort.get(k);
+    if (!prev || (e.at || 0) > (prev.at || 0)) byPort.set(k, e);
+  }
+  let waitingAny = false;
+  let doneAt = 0;
+  let workingSum = 0;
+  for (const e of byPort.values()) {
     if (e.kind === 'waiting') waitingAny = true;
     else if (e.kind === 'done') doneAt = Math.max(doneAt, e.at || 0);
     workingSum += e.working || 0;

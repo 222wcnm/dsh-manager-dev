@@ -514,24 +514,58 @@
   });
 
   // ---- 徽标提醒「该点回来看看了」（design §8.9，M8；M8.1 徽标=会话状态层）----
-  // 只读扫描 webui 会话状态标记（事实基线：StateDot 的 data-state 语义属性——
-  // 工作中 = svg[data-state="ongoing"]（webui 渲染为蓝色状态标签，deepseek 蓝系）；
-  // 等待用户 = [data-state="warning"]；空闲/完成 = data-state="done"），
-  // 页面隐藏时跟踪状态快照并上报**计数**（蓝 n = n 个会话工作中）：
+  // 只读扫描会话状态标记（webui 事实基线：StateDot 的 data-state 语义属性——
+  // 工作中 = svg[data-state="ongoing"]；等待用户 = [data-state="warning"]；
+  // 空闲/完成 = data-state="done"），页面隐藏时跟踪状态快照并上报**计数**
+  // （蓝 n = n 个会话工作中）：
   //   waiting>0 → 'waiting'（紫「?」，优先级覆盖 done/working）；
   //   working>0 → 'working'（蓝 n 常驻状态概览）；
   //   工作 → 空闲（稳定 1.2s）→ 'done'（琥珀「!」事件提醒）；
   //   空闲 → 'idle'（该 tab 无会话信号）。
   // 页面重新可见即发 clear。只判定标记存在性与数量，不读取页面消息内容。
+  // **计数数据源（2026-08-24 修复，design §8.9 修订）**：优先同源服务端点
+  // GET /_manager/sessions（dsh-lifecycle 插件，与 popup「会话」区同一端点、同一
+  // 状态判定）——原实现扫描 webui 页面 DOM（data-state），而 webui 显示态相对
+  // 服务端事件流存在前段渲染延迟，会话完成/空闲的瞬间徽标会拿到旧计数（「徽标
+  // 蓝 2、popup 会话区进行中 1」类不一致）；端点不可用（插件未装/旧版/网络失败）
+  // 时才回退 DOM 扫描（历史行为；此时 popup 会话区为降级/隐藏路径，无「数字
+  // 不一致」用户可见面）。同实例多标签重复计数由 SW 按端口去重（background.js）。
   const ATTENTION_TICK_MS = 1000; // 隐藏页定时器被 Chrome 节流到 1Hz，取 1s 与节流上限对齐
   const ATTENTION_DEBOUNCE_MS = 1200; // 工作→空闲需稳定空态 1.2s（吸收 React 重渲染瞬时抖动）
+  const ATT_SESSIONS_ENDPOINT = '/_manager/sessions';
+  const ATT_FETCH_TIMEOUT_MS = 1500; // 端点快取超时（与服务端点探测/宿主动作一致）
   let attPhase = 'idle'; // idle | working | waiting-fired | done-fired
   let attIdleSince = 0;
   let attActive = false; // 已向 SW 上报过（重新可见时需要 clear）
   let attLastSig = '';   // 最近上报过的 waiting:working 计数签名（变化才上报）
   let attTimer = null;
+  let attBusy = false;   // 端点快取在途：跳过重叠 tick（fetch 超时可 > 1s 周期）
 
-  function attSnapshot() {
+  // 服务端点计数（与 popup 会话区同源）；任何失败返回 null（调用方回退 DOM 扫描）
+  async function attCountsFromEndpoint() {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ATT_FETCH_TIMEOUT_MS);
+    try {
+      const resp = await fetch(ATT_SESSIONS_ENDPOINT, { signal: ctrl.signal, cache: 'no-store' });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      if (!data || data.ok !== true || !Array.isArray(data.items)) return null;
+      let working = 0;
+      let waiting = 0;
+      for (const it of data.items) {
+        if (!it || typeof it !== 'object') continue;
+        if (it.state === 'working') working += 1;
+        else if (it.state === 'waiting') waiting += 1;
+      }
+      return { working, waiting };
+    } catch (_) { /* 端点不可达/被拦截：回退 */ return null; }
+    finally { clearTimeout(timer); }
+  }
+
+  // 计数快照：端点优先（同源一致），失败回退 webui DOM 扫描（插件未装/旧版）
+  async function attSnapshot() {
+    const ep = await attCountsFromEndpoint();
+    if (ep !== null) return ep;
     let working = 0;
     let waiting = 0;
     try {
@@ -547,18 +581,28 @@
     chrome.runtime.sendMessage({ type: 'attention', op, kind, counts }).catch(() => { /* SW 休眠/唤醒竞态：静默，storage 引理自愈 */ });
   }
 
-  function attTick() {
+  async function attTick() {
     if (!contextAlive()) { attStop(); return; }
-    const s = attSnapshot();
+    const now = Date.now();
     if (!document.hidden) {
-      // 页面可见：清除提醒（用户正在看），并复位状态机基线
+      // 页面可见：清除提醒（用户正在看），并复位状态机基线（无需端点数据）
       if (attActive) { attActive = false; attSend('clear'); }
       attPhase = 'idle';
       attIdleSince = 0;
       attLastSig = '';
       return;
     }
-    const now = Date.now();
+    if (attBusy) return; // 上一 tick 的端点快取未返回：跳过（hidden 1Hz 下仅偶发）
+    attBusy = true;
+    let s;
+    try {
+      s = await attSnapshot();
+    } catch (_) {
+      s = null; // 极端分支兜底（attSnapshot 内部已自吸收，此处双保险）
+    } finally {
+      attBusy = false;
+    }
+    if (!s) s = { working: 0, waiting: 0 };
     const sig = s.waiting + ':' + s.working;
     if (s.waiting > 0) {
       // 等待用户：立即上报（等待 > 进行中 > 完成）；计数变化（其他会话工作变化）也更新

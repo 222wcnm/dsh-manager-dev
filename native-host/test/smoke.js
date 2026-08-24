@@ -366,7 +366,24 @@ async function scenarioLifecycle() {
   expect(s6 && s6.ok === true && s6.result.state === 'running', '6 restart -> running', JSON.stringify(s6));
   const rec6 = readRunFile();
   expect(rec6 && rec6.pid !== pid3, '6 restart 后 pid 变化', `old=${pid3} new=${rec6 && rec6.pid}`);
-  const pid6 = rec6.pid;
+
+  // S6b restart 携带与记录不同的端口 -> 生效（2026-08-24 修复：原实现忽略 payload，
+  //     设置改端口后点重启仍起旧端口；协议 §6.2 声明 port/profile 为 start/restart 用）
+  const s6b = runHost({ id: 's6b', action: 'restart', payload: { port: 31904 } }, 's6b');
+  expect(s6b && s6b.ok === true && s6b.result.state === 'running' && s6b.result.port === 31904,
+    '6 restart payload 端口覆盖 -> running@31904', JSON.stringify(s6b && s6b.result));
+  const rec6b = readRunFile();
+  expect(rec6b && rec6b.port === 31904 && rec6b.pid !== rec6.pid,
+    '6 restart 端口覆盖后记录与 pid 正确', rec6b ? JSON.stringify({ pid: rec6b.pid, port: rec6b.port }) : '缺失');
+
+  // S6c restart 显式改回 31903（覆盖「改回」路径，并保持 S7 的 31903 端口关闭断言成立）
+  const s6c = runHost({ id: 's6c', action: 'restart', payload: { port: 31903 } }, 's6c');
+  expect(s6c && s6c.ok === true && s6c.result.state === 'running' && s6c.result.port === 31903,
+    '6 restart payload 改回 -> running@31903', JSON.stringify(s6c && s6c.result));
+  const rec6c = readRunFile();
+  expect(rec6c && rec6c.port === 31903 && rec6c.pid !== rec6b.pid,
+    '6 restart 改回后记录与 pid 正确', rec6c ? JSON.stringify({ pid: rec6c.pid, port: rec6c.port }) : '缺失');
+  const pid6 = rec6c.pid; // S7 停止目标：最后一次重启的实例
 
   // S7 stop -> stopped，端口关闭，记录清除，进程退出
   const s7 = runHost({ id: 's7', action: 'stop', payload: {} }, 's7');

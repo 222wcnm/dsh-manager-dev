@@ -40,6 +40,31 @@ const results = [];
 let chromeProc = null;
 let browserWs = null;
 
+// M8 e2e（2026-08-24 起徽标计数与 popup 会话区同源）：content script 同源端点
+// GET /_manager/sessions（端点优先，DOM 仅回退）。e2e 用 Fetch 域拦截该端点请求，
+// 以 sessionsMockProvider() 返回的 items 构造响应驱动真实链路（content script →
+// SW → 徽标）；provider 为 null 时原请求放行。仅 verify 测试期使用。
+let sessionsMockProvider = null;
+let sessionsMockHits = 0; // 诊断：Fetch 拦截命中次数（断言 mock 确实驱动了链路）
+
+async function fulfillSessionsMock(page, requestId) {
+  if (!sessionsMockProvider) {
+    page.send('Fetch.continueRequest', { requestId }).catch(() => { /* 请求已取消等：忽略 */ });
+    return;
+  }
+  sessionsMockHits += 1;
+  let items;
+  try { items = sessionsMockProvider(); } catch (_) { items = []; }
+  log('M8 mock fulfilled #' + sessionsMockHits + ': ' + JSON.stringify(items));
+  const body = Buffer.from(JSON.stringify({ ok: true, items: Array.isArray(items) ? items : [] }), 'utf8').toString('base64');
+  await page.send('Fetch.fulfillRequest', {
+    requestId,
+    responseCode: 200,
+    responseHeaders: [{ name: 'content-type', value: 'application/json' }],
+    body,
+  });
+}
+
 function log(...a) { console.log('[verify-cdp]', ...a); }
 function record(name, ok, detail) {
   results.push({ name, ok });
@@ -154,6 +179,14 @@ async function main() {
     } else if (m.method === 'Runtime.consoleAPICalled' && m.params && m.params.type === 'error') {
       const args = (m.params.args || []).map((a) => (a.value !== undefined ? String(a.value) : (a.description || ''))).join(' ');
       consoleErrors.push('console.error: ' + args.slice(0, 400));
+    } else if (m.method === 'Fetch.requestPaused') {
+      const reqId = m.params && m.params.requestId;
+      const url = (m.params && m.params.request && m.params.request.url) || '';
+      if (reqId && /\/_manager\/sessions$/.test(url)) {
+        fulfillSessionsMock(page, reqId);
+      } else if (reqId) {
+        page.send('Fetch.continueRequest', { requestId: reqId }).catch(() => { });
+      }
     }
   });
   await page.send('Runtime.enable');
@@ -543,7 +576,11 @@ async function main() {
       })()`);
 
       // 8a-2) M8 端到端（content script → SW，真实链路）：真实 dsh 页面切后台 →
-      //       注入等待标记 → 紫「?」（以 storage attentionMap 条目为链路证据）；
+      //       等待/完成信号 → 紫「?」/琥珀「!」（以 storage attentionMap 条目为链路证据）。
+      //       2026-08-24 起徽标计数与 popup 会话区同源：content script 优先读同源端点
+      //       GET /_manager/sessions（DOM 扫描仅回退）——本轮 e2e 先探测端点可用性：
+      //       可用（实例装配套插件）→ Fetch 域 mock 端点响应驱动真实链路（端点驱动路径）；
+      //       不可用（插件未装/旧版）→ DOM 注入标记驱动回退路径（历史行为）。
       //       （工作→完成路径，仅当基线无真实工作中会话时执行——真实会话运行中则如实记录）；
       //       切回 dsh 标签 → 自动 clear（attentionMap 空 + 徽标恢复）。
       try {
@@ -559,33 +596,61 @@ async function main() {
         record('M8：e2e 前置——dsh 页面已转后台（document.hidden）',
           base.hidden === true, JSON.stringify(base));
 
-        // —— waiting 链路：注入等待标记 → content script 上报 → attentionMap 条目 + 紫「?」——
-        await page.send('Runtime.evaluate', {
-          expression: `(() => {
-            if (!document.getElementById('dshm-test-warning')) {
-              const s = document.createElement('span');
-              s.id = 'dshm-test-warning';
-              s.setAttribute('data-state', 'warning');
-              s.style.display = 'none';
-              document.body.appendChild(s);
-            }
-            return 'injected';
-          })()`,
-          returnByValue: true,
-        });
-        const wAttOk = await waitFor(() => attEntryKind('waiting'), 8000);
-        const wBadgeOk = await waitFor(async () => {
-          const j = await getBadgeJson();
-          return badgeHas(String(j.value || ''), '?', /#8b5cf6|8b5cf6|139,\s*92,\s*246/i);
-        }, 4000);
-        const bAtt = await getBadgeJson();
-        record('M8：e2e 后台+等待标记 → 紫「?」（attentionMap 有 waiting 条目为链路证据）',
-          wAttOk && wBadgeOk,
-          'badge=' + String(bAtt.value || '') + ' base=' + JSON.stringify(base) + (bAtt.raw ? ' ' + bAtt.raw : ''));
-        await page.send('Runtime.evaluate', {
-          expression: `(() => { const n = document.getElementById('dshm-test-warning'); if (n) n.remove(); return 'removed'; })()`,
-          returnByValue: true,
-        });
+        // 端点可用性探测（Node 侧直连 dsh 实例，1.5s 超时；判定走哪条链路）
+        const dshPort = String(new URL(dshUrl).port || '80');
+        let epAvailable = false;
+        try {
+          const ep = await fetch('http://127.0.0.1:' + dshPort + '/_manager/sessions', { signal: AbortSignal.timeout(1500) });
+          epAvailable = ep.ok && (((await ep.json()) || {}).ok === true);
+        } catch (_) { epAvailable = false; }
+        log('M8 e2e 端点可用性: ' + epAvailable + '（endpoint=/_manager/sessions @ ' + dshPort + '）');
+
+        // —— waiting 链路：端点驱动（mock）或 DOM 注入回退 → attentionMap 条目 + 紫「?」——
+        if (epAvailable) {
+          await page.send('Fetch.enable', { patterns: [{ urlPattern: '*_manager/sessions', requestStage: 'Request' }] });
+          sessionsMockProvider = () => ([
+            { sessionId: 'm-waiting', state: 'waiting', updatedAt: 1700000000000 },
+            { sessionId: 'm-working', state: 'working', updatedAt: 1700000000001 },
+          ]);
+          const wAttOk = await waitFor(() => attEntryKind('waiting'), 8000);
+          const wBadgeOk = await waitFor(async () => {
+            const j = await getBadgeJson();
+            return badgeHas(String(j.value || ''), '?', /#8b5cf6|8b5cf6|139,\s*92,\s*246/i);
+          }, 4000);
+          const bAtt = await getBadgeJson();
+          record('M8：e2e 后台+等待信号 → 紫「?」（端点驱动，与 popup 会话区同源；attentionMap 条目为链路证据）',
+            wAttOk && wBadgeOk,
+            'badge=' + String(bAtt.value || '') + ' base=' + JSON.stringify(base) + (bAtt.raw ? ' ' + bAtt.raw : ''));
+          sessionsMockProvider = null;
+          await page.send('Fetch.disable');
+        } else {
+          await page.send('Runtime.evaluate', {
+            expression: `(() => {
+              if (!document.getElementById('dshm-test-warning')) {
+                const s = document.createElement('span');
+                s.id = 'dshm-test-warning';
+                s.setAttribute('data-state', 'warning');
+                s.style.display = 'none';
+                document.body.appendChild(s);
+              }
+              return 'injected';
+            })()`,
+            returnByValue: true,
+          });
+          const wAttOk = await waitFor(() => attEntryKind('waiting'), 8000);
+          const wBadgeOk = await waitFor(async () => {
+            const j = await getBadgeJson();
+            return badgeHas(String(j.value || ''), '?', /#8b5cf6|8b5cf6|139,\s*92,\s*246/i);
+          }, 4000);
+          const bAtt = await getBadgeJson();
+          record('M8：e2e 后台+等待标记 → 紫「?」（DOM 回退路径，插件端点不可用；attentionMap 条目为链路证据）',
+            wAttOk && wBadgeOk,
+            'badge=' + String(bAtt.value || '') + ' base=' + JSON.stringify(base) + (bAtt.raw ? ' ' + bAtt.raw : ''));
+          await page.send('Runtime.evaluate', {
+            expression: `(() => { const n = document.getElementById('dshm-test-warning'); if (n) n.remove(); return 'removed'; })()`,
+            returnByValue: true,
+          });
+        }
 
         // —— 清场：切回 dsh 标签（可见 → clear）→ 等待 attentionMap 空 ——
         await browserWs.send('Target.activateTarget', { targetId: tab.id });
@@ -602,9 +667,41 @@ async function main() {
         const base2Info = await pageEvalInfo();
         let base2 = {};
         try { base2 = JSON.parse(String(base2Info.result.value)); } catch (_) { /* 保持默认 */ }
-        if (base2.ongoing > 0) {
+        if (!epAvailable && base2.ongoing > 0) {
           record('M8：e2e 工作→完成（done）链路——基线存在真实工作中会话，本段如实记录（非失败）',
             true, 'ongoing=' + base2.ongoing + '（真实 dsh 会话仍在运行；done 链路待空闲环境覆盖）');
+        } else if (epAvailable) {
+          // 端点驱动：mock 先返回工作中项 → 随后空（工作→空闲稳定 1.2s 事件沿 → 琥珀!）
+          await page.send('Fetch.enable', { patterns: [{ urlPattern: '*_manager/sessions', requestStage: 'Request' }] });
+          let phase = 0;
+          sessionsMockProvider = () => {
+            phase += 1;
+            return phase === 1
+              ? [{ sessionId: 'm-done', state: 'working', updatedAt: 1700000001000 }]
+              : [];
+          };
+          const dAttOk = await waitFor(() => attEntryKind('done'), 14000);
+          const dBadgeOk = await waitFor(async () => {
+            const j = await getBadgeJson();
+            return badgeHas(String(j.value || ''), '!', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
+          }, 4000);
+          const bDone2 = await getBadgeJson();
+          let doneDiag = '';
+          try {
+            const rd = await page.send('Runtime.evaluate', {
+              expression: `(() => JSON.stringify({
+                hidden: document.hidden,
+                res: performance.getEntriesByType('resource').filter((e) => /_manager\\/sessions/.test(e.name)).map((e) => Math.round(e.duration)),
+              }))()`,
+              returnByValue: true,
+            });
+            doneDiag = ' diag=' + String(rd && rd.result && rd.result.value || '');
+          } catch (_) { /* 诊断非关键 */ }
+          record('M8：e2e 工作→完成 → 琥珀「!」（端点驱动；attentionMap 有 done 条目为链路证据）',
+            dAttOk && dBadgeOk,
+            'badge=' + String(bDone2.value || '') + ' base=' + JSON.stringify(base2) + ' mockHits=' + sessionsMockHits + doneDiag + (bDone2.raw ? ' ' + bDone2.raw : ''));
+          sessionsMockProvider = null;
+          await page.send('Fetch.disable');
         } else {
           await page.send('Runtime.evaluate', {
             expression: `(() => {
@@ -630,7 +727,7 @@ async function main() {
             return badgeHas(String(j.value || ''), '!', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
           }, 4000);
           const bDone2 = await getBadgeJson();
-          record('M8：e2e 工作→完成 → 琥珀「!」（attentionMap 有 done 条目为链路证据）',
+          record('M8：e2e 工作→完成 → 琥珀「!」（DOM 回退路径；attentionMap 有 done 条目为链路证据）',
             dAttOk && dBadgeOk,
             'badge=' + String(bDone2.value || '') + ' base=' + JSON.stringify(base2) + (bDone2.raw ? ' ' + bDone2.raw : ''));
         }

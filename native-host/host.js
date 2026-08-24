@@ -1719,24 +1719,33 @@ async function actionRestart(payload) {
   }
   // 先 stop（含优雅尝试），等待端口关闭（最长 10s，stopCore 内部处理）；method 不上报（restart 仍是 start 语义）
   await stopCore(rec);
-  // 再以 run 记录为准重新 start（以记录为准，而非请求 payload）
+  // 重启参数 = 请求 payload 显式字段优先，run 记录回退（2026-08-24 修复）：
+  // 原实现以记录为准、完全忽略 payload —— 协议 §6.2 声明 port/profile 为 start/restart
+  // 用，popup 在「设置改端口/改 profile 后点重启」时携带新值，却被丢弃，导致重启仍起旧端口。
+  // 现语义：payload 显式给出 host/port/profile/extraArgs 时以 payload 为准（非 adopted 的
+  // extraArgs 仍走 §12.1 白名单），未给出时回退 run 记录（面板空 payload / 旧客户端行为不变；
+  // M4 `--port 0` 血统的 `requestedPort===0 → 0` 语义保留）。
+  const p = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
   if (rec.adopted === true) {
-    // 接管血统：原 argv 归一化重放，跳过 §12.1 白名单（参数源自本机进程表，§6.7），
-    // 且新记录延续 adopted 标记（后续 restart 保持同语义）。
-    // 重放前对危险参数（--host/--trusted-host/--port/--profile/.. 穿越）做黑名单拒绝。
+    // 接管血统（§6.7）：extraArgs 恒源自接管时的本机进程表（黑名单过滤，不走白名单），
+    // 生命周期参数（host/port/profile）默认记录值，payload 显式给出时以 payload 为准
+    // ——但必须先过 validateStartPayload 白名单校验（payload 属扩展输入通道，§12.1）。
+    const life = validateStartPayload({
+      host: p.host !== undefined ? p.host : (rec.host || DEFAULT_HOST),
+      port: p.port !== undefined ? p.port : rec.port,
+      profile: p.profile !== undefined ? p.profile : (rec.profile || 'web'),
+    });
     return startDshCore({
-      host: rec.host || DEFAULT_HOST,
-      port: rec.port,
-      profile: rec.profile || 'web',
+      ...life,
       extraArgs: filterAdoptedExtraArgs(Array.isArray(rec.extraArgs) ? rec.extraArgs : []),
     }, true);
   }
   const startPayload = {
-    host: rec.host || DEFAULT_HOST,
+    host: p.host !== undefined ? p.host : (rec.host || DEFAULT_HOST),
     // M4：--port 0 血统按动态端口语义重放（OS 重新分配），其余按记录端口
-    port: rec.requestedPort === 0 ? 0 : rec.port,
-    profile: rec.profile || 'web',
-    extraArgs: Array.isArray(rec.extraArgs) ? rec.extraArgs : [],
+    port: p.port !== undefined ? p.port : (rec.requestedPort === 0 ? 0 : rec.port),
+    profile: p.profile !== undefined ? p.profile : (rec.profile || 'web'),
+    extraArgs: p.extraArgs !== undefined ? p.extraArgs : (Array.isArray(rec.extraArgs) ? rec.extraArgs : []),
   };
   return actionStart(startPayload);
 }

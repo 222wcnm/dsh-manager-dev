@@ -345,9 +345,9 @@ Popup 对 `starting` / `stopping` 的处理：收到 ack 后进入轮询（每 1
 
 - v1：stop（等待 `stopped`）→ start，宿主内部顺序执行，一次应答。
 - status → `external` 时返回 `EXTERNAL_UNMANAGED`（外部实例不可由扩展直接重启，先接管，§6.7）。
-- M2：stop 自动走优雅路径（插件存在时），随后用 **run 记录里的 cmdline 原样重放** spawn——重启编排权在宿主（插件不需要、也不应该知道自己的 profile/启动参数，见 §7.5）。
-- 接管实例（`adopted:true`）的重启：以接管时解析的 argv 原样重放（lifecycle 参数 profile/host/port 归一化为记录值；`--port 0` 归一化为接管时的实际端口），不走 §12.1 的 extraArgs 白名单（参数源自本机进程表，非扩展输入，见 §6.7）。
-- **M4**：`--port 0` 启动的记录（`requestedPort===0`）按动态端口语义重放——重新以 `--port 0` 拉起并再次从日志回填实际端口（OS 重新分配）；接管实例不受影响（仍按接管时实际端口重放）。
+- **重启参数 = 请求 payload 显式字段优先，run 记录回退（2026-08-24 修订）**：payload 显式给出的 `host`/`port`/`profile`/`extraArgs` 以 payload 为准（§6.2 声明这些字段为 start/restart 用；popup 保存设置后点重启即携带新端口——原实现完全忽略 payload，导致「改端口后重启仍起旧端口」的非预期行为；非接管 `extraArgs` 仍走 §12.1 白名单）。payload 未给出对应字段时回退 run 记录（页面内面板等空 payload 场景、旧客户端行为不变）。——重启编排权在宿主（插件不需要、也不应该知道自己的 profile/启动参数，见 §7.5）。
+- 接管实例（`adopted:true`）的重启：`extraArgs` 恒以接管时解析的 argv 重放（黑名单过滤，不走 §12.1 白名单，参数源自本机进程表，见 §6.7）；生命周期参数（host/port/profile）默认记录值（`--port 0` 归一化为接管时的实际端口），payload 显式给出时以 payload 为准（且必须先通过 start 同款白名单校验）。
+- **M4**：`--port 0` 启动的记录（`requestedPort===0`）按动态端口语义重放——重新以 `--port 0` 拉起并再次从日志回填实际端口（OS 重新分配）；payload 显式给出端口时以 payload 为准（用户意图优先于血统）；接管实例不受影响（仍按接管时实际端口重放）。
 
 **adopt**（外部实例接管，§6.7）
 
@@ -615,7 +615,7 @@ export function apply(ctx) {
 2. 所有 native 请求经 SW 中转（§8.3），popup 不直接 `connectNative`（避免 popup 关闭瞬间断开连接、杀死宿主中断操作）。
 3. `starting` 成功后自动 `chrome.tabs.create` 打开 Web UI（可在设置关闭）。
 4. 错误态展示错误码对应文案（§6.2 表）+「复制日志」按钮（日志内容由宿主在错误响应中带回尾部 20 行）。
-5. 设置面板（popup 内二级视图）：port（默认 3080，**0 = 自动分配动态端口**，M4）、profile（默认 web）、host（固定 127.0.0.1，不可改，v1）、自动打开 UI 开关、徽标刷新间隔。存储于 `chrome.storage.local`（本机相关，不用 sync）。保存成功 toast 提示「设置已保存」。注：原「显示 dsh 控制台窗口」开关及其灰字说明均已移除——开关本身无效（实测 detached 下 `windowsHide` 不生效），说明文案已过时（M5.5 隐藏控制台载体已消除命令执行闪窗，见 §6.3 第 5 步）。
+5. 设置面板（popup 内二级视图）：port（默认 3080，**0 = 自动分配动态端口**，M4）、profile（默认 web）、host（固定 127.0.0.1，不可改，v1）、自动打开 UI 开关、徽标刷新间隔。存储于 `chrome.storage.local`（本机相关，不用 sync）。保存成功 toast 提示「设置已保存」。**port/profile 修改在下次 start/restart 时生效**：运行中实例改端口后点「重启」即按新端口重放（宿主 restart 以 payload 显式字段优先，§6.3；未运行实例直接「启动」即生效）。注：原「显示 dsh 控制台窗口」开关及其灰字说明均已移除——开关本身无效（实测 detached 下 `windowsHide` 不生效），说明文案已过时（M5.5 隐藏控制台载体已消除命令执行闪窗，见 §6.3 第 5 步）。
 6. popup 富状态与提示（M2）：status 返回 `lifecycle:true` 时明细行展示 `health` 富状态（uptime 格式化 + nodeVersion），底部提示「优雅停机已启用（dsh-lifecycle）」；`lifecycle:false` 时提示「安装 dsh-lifecycle 插件可优雅停机」；stop 完成 toast 按 `stopMethod` 区分「已优雅停止 / 已强制停止（未检测到插件或优雅超时）」。
 7. `external` 状态（§6.6）：蓝点 + 「外部运行」；「接管」与「打开 Web UI」可用（启动/停止/重启禁用）；URL 行展示实际地址；明细行展示 PID 与「外部启动，点击接管后由扩展管理」；`externalCount > 1` 时追加实例数提示。
 8. 「接管」（§6.7）：以 status 结果中的 `{pid, port}` 调 `adopt`；成功 → 立即刷新为 running/managed，按钮恢复标准三键；失败按错误码展示（`EXTERNAL_UNMANAGED` 提示实例已变化，重新打开 popup 刷新）。
@@ -849,15 +849,17 @@ popup 设置面板新增「外观」行（四个互斥选项按钮），复刻 W
 
 **触发信号（webui 事实基线，取自 `@deepseek-ai/dsh-client-ui-workspace` 0.1.1-rc.2 客户端包与 `dsh-web-frontend` bundle）**：会话侧栏行由 `StateDot` 渲染——**工作中** = `svg[data-state="ongoing"]`（基线为 10×10 点阵追逐动画；2026-08-22 用户实测当前版本渲染为**蓝色状态标签**（如「Deep diving…」，`--dsh-state-ongoing: --dsw-static-deepseek-450` #5686fe）；徽标蓝 n 与 webui 同源）；**等待用户**（pendingInteraction: approval / question / plan-review）= `span[data-state="warning"]`；空闲/完成 = `data-state="done"`。这组 `data-state` 值是 StateDot 的**语义 API 属性**（非 CSS-module 哈希类名），跨 webui 版本漂移风险低。
 
+> **数据源修订（2026-08-24，徽标←→popup 会话区计数一致性）**：`data-state` 是 webui **显示态**，相对服务端事件流存在前端渲染延迟——会话完成/空闲瞬间扫描会拿到旧计数，且同实例多标签各自上报会被重复累加，产生「徽标蓝 2、popup 会话区进行中 1」的偶发不一致（2026-08-23 用户实机反馈）。**计数改为优先读服务端点** `GET /_manager/sessions`（§8.10，与 popup「会话」区同一端点、同一状态判定），`data-state` DOM 扫描仅作**回退**（插件未装/旧版/端点失败；此时 popup 会话区为降级/隐藏路径，无数字不一致的用户可见面）。同实例多标签的重复计数由 SW 聚合去重（见下第 3 条）。
+
 **行为规范（`extension/content/panel.js` 检测段 + `extension/background.js` 双载体渲染）**：
 
-1. **检测（panel.js，只读）**：与面板共注入（同一指纹激活）。每 1s 扫描两个选择器（`svg[data-state="ongoing"]`、`[data-state="warning"]`），只判定**存在性并计数**（`querySelectorAll().length`），不读取消息内容/文本。状态机：`idle → working →(稳定 1.2s 空态)→ done-fired`；`任意 → waiting-fired`（waiting 出现立即上报，优先级覆盖 done）。等待用户 outranks 工作进行中（用户侧语义：需要拍板 > 继续观察）。注：隐藏页定时器被 Chrome 节流至 1Hz，取 1s 周期与节流上限对齐。
+1. **检测（panel.js，只读；2026-08-24 数据源修订）**：与面板共注入（同一指纹激活）。每 1s 取一次计数快照，**端点优先**：同源 `fetch('/_manager/sessions')`（1.5s 超时，失败静默；只读摘要元数据，与 §8.10 同口径，不读消息内容/文本）→ 统计 `items` 中 `state==='working'` / `state==='waiting'` 的数量；端点不可用（插件未装/旧版/网络失败）时**回退** DOM 扫描（`svg[data-state="ongoing"]`、`[data-state="warning"]` 两个选择器 `querySelectorAll().length`，只判定存在性并计数）。状态机：`idle → working →(稳定 1.2s 空态)→ done-fired`；`任意 → waiting-fired`（waiting 出现立即上报，优先级覆盖 done）。等待用户 outranks 工作进行中（用户侧语义：需要拍板 > 继续观察）。注：隐藏页定时器被 Chrome 节流至 1Hz，取 1s 周期与节流上限对齐；端点快取在途（超时最长 1.5s > 1s 周期）时跳过重叠 tick。
 2. **触发即上报（页面隐藏时；计数签名变化才发）**：仅在 `document.hidden === true`（标签不活跃或窗口最小化）时上报；`set`: `{type:'attention', op:'set', kind:'idle'|'working'|'waiting'|'done', counts:{working,waiting}}` → SW；**waiting:0→working:0 的计数签名（`waiting:working`）变化即上报**（蓝 n 常驻概览的数据源），`done` 为工作→空闲稳定 1.2s 的事件上报；SW 侧 `sender.tab.id` 为事实键（多个 dsh 标签页各记各的）。**页面重新可见即发 `op:'clear'`**（防「用户已在看却仍挂提醒」）。
-3. **SW 侧（background.js）**：`attentionMap`（storage.local，`{ [tabId]: {kind, working, waiting, at, port} }`）持久化——MV3 SW 可回收，徽标状态以 storage 为事实源；`tabs.onRemoved` 清理；**同标签导航离开 dsh（tab 未关闭）由 `tabs.onUpdated` 按 URL 判定清理（M8 修补 M2，content script 侧 pagehide 亦发 clear 双保险）**；`onStartup`/`onInstalled` 清空（浏览器重启/扩展更新后的旧提醒无意义，沿用占位即可）；4 小时 TTL 防僵尸键（兜底，不影响正常使用）。徽标渲染优先级：**waiting（紫「?」#8b5cf6）> done（琥珀「!」#f59e0b）> working（蓝 n #5686fe，n≥10 显示「9+」）**；文字色显式 `#ffffff`。**死提醒联动（M8.1 修补）**：refreshBadge 判定实例未运行/异常时，按条目 `port`（上报时从 tab.url 解析）清除对应端口的会话信号——此前「实例已停、紫?/琥珀! 仍挂 4h TTL」的误导场景。title 同步：等待/完成/woking 三条文案 + 服务态（角标层）title。
+3. **SW 侧（background.js）**：`attentionMap`（storage.local，`{ [tabId]: {kind, working, waiting, at, port} }`）持久化——MV3 SW 可回收，徽标状态以 storage 为事实源；`tabs.onRemoved` 清理；**同标签导航离开 dsh（tab 未关闭）由 `tabs.onUpdated` 按 URL 判定清理（M8 修补 M2，content script 侧 pagehide 亦发 clear 双保险）**；`onStartup`/`onInstalled` 清空（浏览器重启/扩展更新后的旧提醒无意义，沿用占位即可）；4 小时 TTL 防僵尸键（兜底，不影响正常使用）。**同实例多标签去重（2026-08-24 修订）**：聚合前按条目 `port` 归并——同端口只保留 `at` 最新条目（idle 无信号条目不参与同端口竞争，保持「空=安静」语义）；无端口条目（外部/旧数据兼容）按 tab 独立参与。徽标渲染优先级：**waiting（紫「?」#8b5cf6）> done（琥珀「!」#f59e0b）> working（蓝 n #5686fe，n≥10 显示「9+」）**；文字色显式 `#ffffff`。**死提醒联动（M8.1 修补）**：refreshBadge 判定实例未运行/异常时，按条目 `port`（上报时从 tab.url 解析）清除对应端口的会话信号——此前「实例已停、紫?/琥珀! 仍挂 4h TTL」的误导场景。title 同步：等待/完成/woking 三条文案 + 服务态（角标层）title。
 4. **设置**：`settings.attention`（默认 `true`，popup 设置面板「界面」分组开关「徽标提醒（回来看看）」）——关闭后 SW 忽略 set 且清空累积条目（`handleAttention` 的 set 分支以前置判断拒绝 + storage.onChanged 在开关变 off 瞬间清空 attentionMap），否则关闭期间的条目会在重开开关时冒出一条「凭空」提醒（H1 修补；M8.1 盲审补正：清理以**本次变化的权威值**为基——单次 set 同时改 settings+attentionMap 时 onChanged 回调内 settings 分支先于 attentionMap 分支、快照条目尚未入内存，旧实现会清理扑空，且 newValue 旧快照会把已删条目恢复回内存，已加 purged 防恢复）。`settings.attentionDone`（默认 `true`，「徽标：工作完成提醒（琥珀!）」独立开关）——已上表的 done 事件单独可关，waiting/working 不受影响；关闭瞬间同样剔除既有 done 条目（H1 对称修补），期间 done 也不会被新写入（set 分支前置拒绝）。
 5. **防误报**：① 完成判定需空态稳定 1.2s（React 重渲染/点阵属性瞬时抖动被吸收）；② 工作→空闲→再工作 可再次上报（每次真实完成都提醒，cooldown 由「见到新 working 才复位」保证——done-fired 后须再观测到 working 才可能再次 done-fired）；③ sending 失败（SW 休眠/唤醒竞态）静默吞掉（storage 缓存与下游 clear 自愈）。
-6. **局限（v1 接受并记录）**：会话侧栏**完全关闭**（sidebar 宽度 0，行组件卸载）时无标记可扫，检测不可用（默认布局与窄屏 rail 均渲染行，仅完全关闭受影响）；用户仅 alt-tab 到其他应用（窗口未最小化、标签仍是活动标签）时 `document.hidden` 为 false，不触发——这是浏览器页面可见性语义，无法绕过；**蓝 n 仅在至少一个 dsh 页面存在且后台时可用**（无页面=无会话信息=徽标空，∈双向分层）。
-7. **安全**（§12.2 补充）：只读扫描两个语义属性（存在性/计数判定），不读取/采集页面 DOM 内容与消息文本；上报消息只含 kind（四值枚举）+ 计数值 + 端口（从 tab.url 解析）；SW 只接受带 `sender.tab` 的上报（扩展自身页面无 tab，不可伪造他 tab），**并校验 `sender.tab.url` 为 dsh 回环页**（127.0.0.1/localhost，本扩展 host_permissions 恰好覆盖，无新增权限）；无新增权限与 host_permissions。
+6. **局限（v1 接受并记录）**：端点路径下徽标计数与 popup 会话区同源一致（2026-08-24 起）；DOM 回退路径（插件未装/旧版/端点失败）保留历史局限：会话侧栏**完全关闭**（sidebar 宽度 0，行组件卸载）时无标记可扫，检测不可用（默认布局与窄屏 rail 均渲染行，仅完全关闭受影响）；用户仅 alt-tab 到其他应用（窗口未最小化、标签仍是活动标签）时 `document.hidden` 为 false，不触发——这是浏览器页面可见性语义，无法绕过；**蓝 n 仅在至少一个 dsh 页面存在且后台时可用**（无页面=无会话信息=徽标空，∈双向分层）。
+7. **安全**（§12.2 补充）：端点路径只读 `/_manager/sessions` 的**摘要元数据**（sessionId/标题/四态/时间戳，与 popup 会话区间源同口径，不读消息内容/文本——§8.10 已定「摘要」边界），仅同源请求（页面 origin = 实例 origin；插件 `allow()` 围栏对回环 + 同源放行，§12.1）；DOM 回退路径只读两个语义属性（存在性/计数判定），不读取/采集页面 DOM 内容与消息文本；上报消息只含 kind（四值枚举）+ 计数值 + 端口（从 tab.url 解析）；SW 只接受带 `sender.tab` 的上报（扩展自身页面无 tab，不可伪造他 tab），**并校验 `sender.tab.url` 为 dsh 回环页**（127.0.0.1/localhost，本扩展 host_permissions 恰好覆盖，无新增权限）；无新增权限与 host_permissions。
 
 #### 8.9.1 三层颜色语义分层（避免跨载体混淆，2026-08-22 用户决策）
 
@@ -1157,7 +1159,7 @@ dsh-manager/
 - 不调用 `/api`（Origin 围栏，F9）；探活只用 `GET /`。
 - 生命周期插件端点（§7）必须自我设限：仅回环连接 + Origin 缺失或同源，**绝不注册为公开 RPC**；「扩展 → 宿主 → HTTP」链路因宿主请求无 Origin 而天然合规，扩展直连则被拒。
 - 扩展 host_permissions 仅回环；不申请任何超出需求的权限。
-- **页面内面板（§8.6）**：content script 只注入 dsh 指纹页面（127.0.0.1/localhost 任意端口）；面板对页面的唯一写操作是追加自身 shadow 节点，不读取/修改页面 DOM 与数据；停止/重启经 SW → 宿主全套防护（PID 校验、外部实例保护、锁），面板不持有任何特权 API（无 `/_lifecycle` 直连、无宿主角色的独立判定）。**例外（M8，§8.9）**：徽标提醒段对页面做**只读存在性扫描**（`svg[data-state="ongoing"]` / `[data-state="warning"]` 两个语义属性是否存在），不采集消息文本/会话内容；扫描结果仅以两值枚举 `done|waiting` 上报 SW。
+- **页面内面板（§8.6）**：content script 只注入 dsh 指纹页面（127.0.0.1/localhost 任意端口）；面板对页面的唯一写操作是追加自身 shadow 节点，不读取/修改页面 DOM 与数据；停止/重启经 SW → 宿主全套防护（PID 校验、外部实例保护、锁），面板不持有任何特权 API（无 `/_lifecycle` 直连、无宿主角色的独立判定）。**例外（M8，§8.9；2026-08-24 扩为端点摘要）**：徽标提醒段优先**同源只读** `GET /_manager/sessions`（§8.10 摘要元数据：sessionId/标题/四态/时间戳，**不读消息体/事件内容/凭据**；仅同源回环请求）；端点不可用时回退只读存在性扫描（`svg[data-state="ongoing"]` / `[data-state="warning"]` 两个语义属性是否存在），不采集消息文本/会话内容；上报 SW 仅为两值枚举 `done|waiting` + 计数。
 
 ### 12.3 数据与凭据
 
