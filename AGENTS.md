@@ -25,11 +25,11 @@ node --check native-host/host.js                     # 宿主语法检查
 node native-host/test/smoke.js                       # 冒烟测试 27 场景（本机：Windows 347 PASS+1 SKIP——场景 26 POSIX；Linux 337 PASS+1 SKIP——场景 27 载体为 Windows 专属；全新克隆：Windows 332 PASS+4 SKIP——3 项本地产物核对跳过；BASE_ENV 进程枚举围栏仅 Windows 生效——场景 26 在 POSIX 不注入任何钩子走真实 /proc 平台层）
 node native-host/test/smoke-real.js                  # 真实 dsh 集成（需 DSH_MANAGER_NPM_PREFIX=%APPDATA%\npm）
 node native-host/test/e2e-m9-manager.js              # M9 真实实例 e2e（真实 profile 插件装配；插件未升级时 SKIP；需 danger-full-access）
-node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（29 项）
+node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（33 项）
 powershell -ExecutionPolicy Bypass -File native-host\install.ps1 -DryRun   # 安装预演（Windows）
 sh native-host/install.sh --dry-run                                          # 安装预演（Linux/macOS）
 powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E  # WSL Linux 冒烟 + 真实安装 E2E
-node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 94 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 面板体验回归（托管绿点+端口、展开时胶囊位置不变、面板在胶囊上方、扩展重载后旧面板提示刷新/刷新恢复） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + M8/M8.1 徽标提醒（SW 分层 done「!」/ waiting「?」/ 蓝 n 工作中计数 / 9+ 边界 / done>working 优先级 / 清空恢复 + 角标断言（icon 状态 + title）+ e2e 后台页注入等待标记 → 黄「?」→ 切回标签自动清除）+ 主题与深色断言（面板深色跟随、storage 镜像写入、popup 四态 + Emulation 系统模拟、深色段无新增 console 异常）+ M7 断言（状态卡结构/文案、状态变体（running 实心点呼吸 / external / busy 琥珀脉冲无矩阵 / error 红调卡 / stopped 灰点）、深/浅状态卡背景（深=#353638 精确值）、面板呼吸动画）+ M9 断言（会话区初始隐藏、三态渲染+圆点色表（蓝/黄/绿——M10.1 定稿三态三色；idle 不渲染）、title 降级「会话 #id 前8」、空态、插件不可用降级、折叠 aria、行纯展示（点击不打开标签页防误导回归）、三态全呼吸+光晕分层、全 popup 呼吸相位同步）+ M10 断言（默认色板三态、改色后会话区/徽标底色实际变化、实例层圆点不随角色色改、撞色 toast、恢复默认（storage 键级比对）、字符语义回归）+ console 异常检查；默认 dsh URL 3080（VERIFY_DSH_URL 覆盖））
+node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 97 断言（沙箱内可用，若沙箱拦 headless Chrome 启动则需沙箱外；popup/logs/面板注入与展开 + 面板停止两步确认态（首击确认/3s 还原，不执行） + 面板体验回归（托管绿点+端口、展开时胶囊位置不变、面板在胶囊上方、扩展重载后旧面板提示刷新/刷新恢复） + 日志页「加载更早/复制全部」交互 + popup 设置校验交互 + 徽标三步实测 + M8/M8.1 徽标提醒（SW 分层 done「!」/ waiting「?」/ 蓝 n 工作中计数 / 9+ 边界 / done>working 优先级 / 清空恢复 + 角标断言（icon 状态 + title）+ e2e 后台页注入等待标记 → 黄「?」→ 切回标签自动清除）+ 主题与深色断言（面板深色跟随、storage 镜像写入、popup 四态 + Emulation 系统模拟、深色段无新增 console 异常）+ M7 断言（状态卡结构/文案、状态变体（running 实心点呼吸 / external / busy 琥珀脉冲无矩阵 / error 红调卡 / stopped 灰点）、深/浅状态卡背景（深=#1e2025 渲染）、面板呼吸动画）+ M9 断言（会话区初始隐藏、四态渲染+圆点色表（M11：待确认>进行中/已停止>已完成新鲜；idle 与陈旧完成不渲染）、title 降级「会话 #id 前8」、子代理树行、空态、插件不可用降级）+ M10 断言（默认色板三态、改色后会话区/徽标底色实际变化、实例层圆点不随角色色改、撞色 toast、恢复默认（storage 键级比对）、字符语义回归）+ M11 断言（仅新鲜完成显示、已读入口与 3s 撤销倒计时、落库移除行、retentionMins=0 时已停止恒显）+ console 异常检查；默认 dsh URL 3080（VERIFY_DSH_URL 覆盖））
 node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome-devtools-mcp，需沙箱外）
 ```
 
@@ -43,6 +43,16 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
 - 宿主测试钩子（环境变量）：`DSH_MANAGER_BASE_DIR`、`DSH_BIN_STUB`、`DSH_MANAGER_NPM_PREFIX`、`DSH_MANAGER_PID_CHECK=0`、`DSH_MANAGER_FAKE_PROCESSES`（JSON `[{pid,cmdline}]`）、`DSH_MANAGER_FAKE_LISTENERS`（JSON `[{pid,addr,port}]`）；仅当 `DSH_MANAGER_TEST_MODE=1` 时生效
 
 ## 当前状态与路线
+
+- **M11.1 Popup 空间架构升级（2026-08-25 完成与定稿，design §8.2）**：彻底解决传统单列 Popup 在会话展开、设置切换时的尺寸拉长与高度抖动问题，升级为 **V6 侧边 Rail 导轨模式（380px 宽度 × 270px 严格物理锁定高度，绝对零抖动）**。
+  - **核心架构**：左侧 **46px 极窄 Rail 导轨**（概览/会话/设置 3 态导航 + 同相位 2.2s 常驻呼吸指示灯）+ 右侧 **334px 独立视口**（搭载 `panel-slide-in` 平滑进场动效）。
+  - **官方原生资产库全量接入 (`dsh-assets-library.js`)**：100% 提取自 `@deepseek-ai/` 官方 bundle，包含 `FishLogo`（精准 23.16:17.04 比例，悬停触发原厂 `dsh-fish-swim` 游弋动效）、`BrandBadge`（`[DSH WEB]` 矩形微胶囊）、`StateMatrix`（进行中点阵）、4 态外观主题图标与全套业务图标。
+  - **官方真实选中态规范**：严格遵循 Web UI 真实规范——无粗重反色填充，无多余外黑/白框线，采用**纯净柔和的灰色圆角背景**（深色 `rgba(255,255,255,0.14)`，浅色 `rgba(38,49,72,0.10)`），图标文本高亮提亮。
+  - **排版重构与精修**：
+    - **服务概览**：`[FishLogo] Whalekeeper [DSH WEB] [3080]` + 状态卡 + 打开 Web UI + 三态运维操作行 + 优雅停机感知与「查看日志」入口；
+    - **会话感知**：卡片流只读感知（琥珀待确认、`shimmer` 流光扫光进行中、柔绿已完成）+「前往 Web UI 统一处理」；
+    - **首选项设置**：三大分组微卡片（服务运行环境 / 徽标与外观 / 扩展徽标与会话颜色）+ Profile 方案 A 友好说明 + 4 态外观 Theme Cube + 3 角色静态单层柔光色盘（安静不呼吸）+ 底部双操作栏。
+  - **无回归兼容**：保持原有全部 DOM ID 契约与 Service Worker / Native 通信链路 100% 兼容。
 
 - **M10 颜色语义自定义（2026-08-24 完成 + M10.1 定稿，design §8.12 + 实施注记）**：`settings.colorMap` 预设色板，用户可改色（同 theme-cube 交互；「恢复默认色板」；保存设置不覆盖）；error 红（`#ec1313`）与字符/文字语义锁定。链路：新增 `extension/colors.js`（`window.DSHColors`，theme.js 同构：storage 订阅 + documentElement inline `--dsh-mgr-sem-*`；白名单色板无任意输入；popup.html 引入）→ popup 会话区圆点走语义变量（`.dot-error` 集中引用 `--dsh-mgr-sem-error`）→ **SW 徽标底色运行时读 colorMap**（`background.js` `normColorMap` 零依赖同口径；字符 `?`/`!`/n 恒在）。**M10.1 定稿（2026-08-24 用户拍板——体验后确认最终色板，定稿流程闭环）**：**只显示三态三色，遵循 Web UI 区分**——进行中=webui 蓝 `#5686fe` / 待确认=琥珀黄 `#f59e0b`（用户实机观察 webui 计划面板=黄色，取同色系；紫色退出默认色板）/ 完成=绿 `#22c55e`；**done（完成待办提醒）并入 completed 色**（徽标「!」随定稿由琥珀改绿；「查看后不再显示」= M8 页面可见即 clear，行为不变；`attentionDone` 独立开关保留）；**idle 不再展示**（渲染层过滤——live 集合近零出现 + webui 本体不区分，§8.10 idle 注记）；状态词「等你拍板」→「**待确认**」（拍板；emoji 徽标仅问询，暂不引入——字符语义仍锁定）。**生效范围取舍（实施注记）**：colorMap 严格按 §8.12 角色表载体列生效（徽标 + popup 会话区圆点）；**状态展示层（状态卡/面板/logs 实例圆点）不随角色色改**——其主语义是颜色（§8.9.1），防「空闲→绿」把已停止实例渲染成绿点毁坏实例语义，继续走 `--dsw-alias-state-*` 令牌（verify 显式断言不变）。验收：verify-cdp **94 / FAIL 0**（M10 段 + M9 idle 过滤 + 徽标色断言全量更新）；`node --check` 全过；无新增 console 异常。**顺带修复**：verify 默认 dsh URL 8080→**3080**（8080 为用户旧实例端口，真实 run 记录在 3080——面板/主题段此前因指向空端口假失败）。**UI 用词（2026-08-24 用户拍板）**：设置面板区名「**颜色角色**」（直观、点明"每种颜色承担一个角色"）；术语层=**语义色（semantic color）**——design token 标准语，里程碑名/代码 `--dsh-mgr-sem-*`/`settings.colorMap` 沿用"颜色语义"表述。
 

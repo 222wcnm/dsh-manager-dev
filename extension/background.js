@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS = {
   attention: true,   // M8：徽标提醒「该点回来看看了」（design §8.9）
   attentionDone: true, // M8.1：工作完成提醒「绿!」独立开关（默认开；语义见 §8.9；M10.1 定稿色）
   theme: 'follow-webui', // M6：与 popup.js 默认值保持一致（防 onInstalled 合并丢弃主题）
+  retentionMins: 30, // M11：完成会话保留时长（分钟；5~1440，0=不显示已完成；与 popup.js 保持一致）
   // M10 颜色语义（design §8.12）——M10.1 定稿（2026-08-24 用户拍板）：三角色三色——
   // 待确认=琥珀黄 #f59e0b（webui 计划面板同色系）/ 进行中=webui 蓝 #5686fe / 完成=绿 #22c55e
   // （done 完成待办消息并入 completed 色：徽标「!」底色取 completed）；idle 不再展示；

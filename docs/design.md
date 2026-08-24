@@ -588,42 +588,56 @@ export function apply(ctx) {
 - `alarms` 用于周期徽标刷新（可选功能，默认开、30s 间隔）。
 - **不申请** `webRequest` / `declarativeNetRequest` / 任意文件系统权限——不需要，也避免商店审核与用户信任问题。
 
-### 8.2 popup（popup.html/js/css）
+### 8.2 popup（popup.html/js/css，V6 侧边 Rail 导轨空间架构）
 
-**视觉规范：与 dsh Web UI 设计系统对齐。** popup.css 直接内联 dsh 前端的设计令牌（`--dsw-*` 变量，浅色主题 + 深色主题两套（§8.7），与 Web GUI 一致）：字体栈 `-apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", …`；主文字 `--dsw-alias-label-primary`（近黑 `rgb(15,17,21)`）；次要/说明文字 label-secondary / label-tertiary / label-caption；面板底 `--dsw-alias-bg-base`（白）；边框 `--dsw-alias-border-l1/l2`（`rgba(0,0,0,.04/.1)`）；悬停 `--dsw-alias-interactive-bg-hover`（`rgba(38,49,72,.06)`）；主按钮品牌底（`--dsw-alias-button-primary-fill`）+ 前景`--dsw-alias-label-primary-foreground`（浅色=近黑底/白字，深色=近白底/深字，与 Web UI 同策略）、悬停 `--dsw-alias-button-primary-hover`；状态色 success `rgb(34,197,94)` / warn `rgb(245,158,11)` / error `rgb(236,19,19)` / business 蓝 `rgb(65,118,230)`；状态圆点复刻 Web UI 的分层圆点组件（外圈 10% 透明度光晕 + 内实心，忙碌态脉冲，error 红色）；按钮与面板圆角 12px、输入框 6px（均取自 Web UI 组件实测值，见 tools/visual-audit）。**图标与 Web UI 同源**：状态行左侧的 DeepSeek 鲸鱼 logo（182×24，侧栏左上角原样内联）与右侧的设置齿轮图标（16×16，侧栏左下角设置项原样内联，含 clipPath）。令牌值与图标均取自 dsh 前端产物（本仓库 `5f6ed241-…htm` 存档核验）。
+**空间架构与尺寸基线：380px 宽度 × 270px 严格物理锁定高度（零抖动）。** 采用 Master-Detail 侧边导轨架构（左侧 **46px 极窄 Rail 导轨** + 右侧 **334px 独立视口**），尺寸从 360×240px 舒展放大至 380×270px，不仅彻底根除传统单列视图在面板展开、设置切换时的尺寸拉长与跳动问题，还为多会话列表与运维操作提供了从容呼吸的视觉空间。
 
-布局（自上而下）：
+**视觉规范：100% 对齐 dsh Web UI 设计系统与原厂原生资产。**
+1. **设计令牌与色彩**：直接内联 dsh 前端设计令牌（`--dsw-*` 变量，浅色 + 深色两套（§8.7））：主文字 `--dsw-alias-label-primary`；次要/说明文字 label-secondary / label-tertiary / label-caption；面板底 `--dsw-alias-bg-base`；模块底 `--dsw-alias-bg-module-platform`；边框 `--dsw-alias-border-l1/l2`；悬停 `--dsw-alias-interactive-bg-hover`。
+2. **官方真实选中态（Active State）**：严格遵循 Web UI 真实规范——**无粗重实心反色填充，无多余黑/白外框线，采用纯净柔和的灰色圆角背景**（深色模式 `rgba(255, 255, 255, 0.14)`，浅色模式 `rgba(38, 49, 72, 0.10)`），图标与文本高亮提亮为 Primary 色。
+3. **官方原生 SVG 资产库 (`dsh-assets-library.js`)**：全量接入从官方 bundle 提取的精准资产：`FishLogo`（精准 23.16:17.04 比例）、`BrandBadge`（矩形微胶囊字标）、`StateMatrix`（进行中跑马灯点阵）、`IconPanelLeftOutline16`（概览）、`IconNewChatOutline16`（会话）、`IconSettingsOutline16`（设置）、四态主题图标等。
+4. **官方动效系统（Keyframes）**：
+   - 小鲸鱼游弋（`dsh-fish-swim`）：悬停触发原厂 0.6s 平滑游动；
+   - 面板平滑滑入（`dsh-panel-in`）：面板切换带 `translateX(6px) → 0` 0.18s 顺滑进场；
+   - 进行中流光扫光（`dsh-shimmer`）：2.2s 高光渐变扫过文字；
+   - 全局呼吸 Document Timeline 同步：所有指示灯以打开瞬间为零点基准，绝对同频同相呼吸；
+   - 触觉按压反馈（`:active` scale 0.96）。
+
+布局架构（V6 导轨双栏）：
 
 ```
-┌──────────────────────────────┐
-│ [鲸鱼logo] ● dsh web     [⚙] │   ← 分层圆点：灰 stopped / 琥珀脉冲 starting·stopping /
-│ http://127.0.0.1:3080        │       绿 running / 蓝 external / 红 error；logo 与 ⚙ 图标
-│                              │       与 Web UI 同源（侧栏左上 logo / 左下设置齿轮）
-│                              │
-│ [ 启动 ]  [ 停止 ]  [ 重启 ] │   ← 启动=黑底主按钮；停止=红字描边；重启=描边
-│ [ 接管 ]  [ 打开 Web UI ]    │   ← 接管仅 external 时显示（黑底主按钮）
-│                              │
-│ 状态：running · PID 12345    │   ← M2：插件存在时追加 uptime/会话数等富状态
-│ 日志尾部（异常时）           │
-│ 提示文案      [查看日志]     │   ← M3：底部提示行右侧常驻「查看日志」入口
-└──────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│ [46px Rail 导轨] │ [334px 独立视口 (高度物理锁定 270px)]      │
+│                  │                                          │
+│ [ ◫ 服务概览 ]   │ [FishLogo] Whalekeeper [DSH WEB]  [3080] │
+│ [ 💬 会话感知 ]  │ ──────────────────────────────────────── │
+│ [ ⚙ 偏好设置 ]   │  ● 运行中                           健康 │
+│                  │  已运行 76m43s · PID 53844 · node v24.19 │
+│                  │                                          │
+│                  │  [             打开 DSH Web UI          ] │
+│                  │  [ ▷ 启动 ]    [ ■ 停止 ]      [ ↻ 重启 ] │
+│                  │                                          │
+│ ● (常驻同频呼吸) │  优雅停机已就绪                 查看日志 │
+└──────────────────┴──────────────────────────────────────────┘
 ```
 
-行为规范：
+三大面板职责与排版：
 
-1. 打开即调 `status`，随后每 2s 轮询一次探活/status（popup 关闭自动停止）。
-2. 所有 native 请求经 SW 中转（§8.3），popup 不直接 `connectNative`（避免 popup 关闭瞬间断开连接、杀死宿主中断操作）。
-3. `starting` 成功后自动 `chrome.tabs.create` 打开 Web UI（可在设置关闭）。
-4. 错误态展示错误码对应文案（§6.2 表）+「复制日志」按钮（日志内容由宿主在错误响应中带回尾部 20 行）。
-5. 设置面板（popup 内二级视图）：port（默认 3080，**0 = 自动分配动态端口**，M4）、profile（默认 web）、host（固定 127.0.0.1，不可改，v1）、自动打开 UI 开关、徽标刷新间隔。存储于 `chrome.storage.local`（本机相关，不用 sync）。保存成功 toast 提示「设置已保存」。**port/profile 修改在下次 start/restart 时生效**：运行中实例改端口后点「重启」即按新端口重放（宿主 restart 以 payload 显式字段优先，§6.3；未运行实例直接「启动」即生效）。注：原「显示 dsh 控制台窗口」开关及其灰字说明均已移除——开关本身无效（实测 detached 下 `windowsHide` 不生效），说明文案已过时（M5.5 隐藏控制台载体已消除命令执行闪窗，见 §6.3 第 5 步）。
-6. popup 富状态与提示（M2）：status 返回 `lifecycle:true` 时明细行展示 `health` 富状态（uptime 格式化 + nodeVersion），底部提示「优雅停机已启用（dsh-lifecycle）」；`lifecycle:false` 时提示「安装 dsh-lifecycle 插件可优雅停机」；stop 完成 toast 按 `stopMethod` 区分「已优雅停止 / 已强制停止（未检测到插件或优雅超时）」。
-7. `external` 状态（§6.6）：蓝点 + 「外部运行」；「接管」与「打开 Web UI」可用（启动/停止/重启禁用）；URL 行展示实际地址；明细行展示 PID 与「外部启动，点击接管后由扩展管理」；`externalCount > 1` 时追加实例数提示。
-8. 「接管」（§6.7）：以 status 结果中的 `{pid, port}` 调 `adopt`；成功 → 立即刷新为 running/managed，按钮恢复标准三键；失败按错误码展示（`EXTERNAL_UNMANAGED` 提示实例已变化，重新打开 popup 刷新）。
-9. **点击反馈（操作确认，M1.3/M2）**：任何操作点击后**立即乐观更新**——全部生命周期按钮禁用、被点按钮转圈 + 「…中」文案、出现不定进度条 + 阶段说明 + 已耗时（每秒刷新），随后由应答/轮询收敛到终态并弹 **toast 确认**：启动完成 / 已优雅停止或已强制停止（按 stopMethod）/ 重启完成 / 接管成功；restart 分两阶段可见（「正在重启：停止旧进程」→「新进程启动中，等待端口就绪」→「重启完成」）；失败弹红色 toast + 错误面板；`ALREADY_RUNNING`/`ALREADY_STOPPED` 幂等成功同样弹确认。操作请求在途（native ack 前）**暂停轮询**，避免 status 在 SW 串行队列后堆积；「复制日志」「设置保存」亦弹 toast。**举一反三**：手动刷新按钮（点击转圈到本次 status 返回）、设置表单无效输入红边框 + 抖动 + 聚焦、复制日志失败 toast、无操作时的状态漂移通知（外部实例出现/退出、意外停止、错误恢复），全部有明确反馈。
-10. **动效与图标（M1.3）**：按钮按压缩放（`:active` scale 0.96，图标按钮 0.9）、面板/URL 行淡入、状态点颜色过渡、忙碌脉冲、按钮内 spinner 与不定进度条；`prefers-reduced-motion: reduce` 下全部动画关闭。扩展图标（16/48/128）由占位图替换为**与 Web UI 同源的鲸鱼图形**（路径 = 侧栏 logo 的鲸鱼部分，`--dsw-alias-label-primary` 色 #0F1115、透明底，`tools/icons/_gen-icons.js` 以 headless Chrome 4x 超采样 + 盒式降采样渲染生成）。
-11. **日志入口（M3）**：底部提示行右侧常驻「查看日志」按钮 → `chrome.tabs.create(chrome.runtime.getURL('logs.html'))` 打开日志查看页（§8.4）。
-12. **按钮状态矩阵（M1.3/M2 实行，2026-08-22 修订补齐 error/忙碌对齐）**：启动 = `stopped` **或 `error`**（错误态保留重试入口——错误面板引导的修复动作如换端口/装 dsh 完成后可直接点启动重试，明细行提示「修复后点击启动重试」）；停止/重启 = `running`；接管 = `external`；打开 Web UI = `running`/`external`；操作在途（pending）时全部生命周期按钮锁定。**忙碌视觉与状态对齐**：本窗口发起的操作——被点按钮保持全亮（不被禁用灰化）转圈 + 「…中」文案 + 不定进度条；他处发起（无 pending 的 `starting`/`stopping`，如宿主回填前窗口）——对应按钮同样全亮转圈 + 「…中」文案，与圆点琥珀脉冲一致；其余按钮灰显。
-13. **状态快照竞态防护（2026-08-22 实机报错修复）**：status 快照可能早于用户操作（init 首查/手动刷新/保存设置时请求已在途，应答晚于操作发起）——三条防线：① `refreshStatus`/`manualRefresh` 应答时若 `pending.atMs > reqAt`（快照发出早于操作发起）直接丢弃；② `applyStatus` 的 pending 终态判定仅在操作已应答（ack=false）后执行——ack=true（请求在途）只更新展示；且 `state==='stopped'` 对 start/restart 为合法中间快照（M5.5 时序下新进程端口就绪前无 run 记录、status 报 stopped），保留 pending 等待 starting/running；③ `doAction` 应答处理前 null 防御（极端竞态下弃用本次应答，状态由 2s 轮询自愈，不抛 TypeError）。
+1. **面板 1：服务概览 (Dashboard)**：
+   - 顶栏：悬停游弋 `FishLogo` + `Whalekeeper` + `BrandBadge[DSH WEB]` + 端口微胶囊 `[3080]`；
+   - 状态卡：分层圆点 + 运行状态 + 健康度 + PID/uptime/nodeVersion 明细；
+   - 主操作区：宽幅「打开 DSH Web UI」主入口 + 启动/停止/重启运维操作行（34px 舒适操作高度）；
+   - 底栏：优雅停机状态感知 + 「查看日志」独立全页入口（§8.4）。
+2. **面板 2：会话状态感知 (Sessions)**：
+   - 顶栏：`会话状态感知` + 胶囊 `[3 活跃]` + `只读感知`；
+   - **原厂无框通透平铺列表**：移除每个会话的实体外框与小卡片背景，对齐 DSH Web UI 侧栏会话风格，透明背景 + 悬停轻盈半透灰底（`var(--dsw-alias-interactive-bg-hover)`），配备 4px 极窄半透明滚动条；包含待确认（琥珀呼吸点）、进行中（`StateMatrix` 点阵 + `shimmer` 流光扫光）、已完成（柔绿呼吸点）；
+   - 底部操作：宽幅「前往 Web UI 统一处理」。
+3. **面板 3：首选项设置 (Settings)**：
+   - 分组微卡片化结构（Section Cards）：
+     - **服务运行环境**：端口（0=自动）、Profile 方案（方案 A 友好注记：*默认 web，用于指定 dsh 启动方案，一般无需修改*）、自动打开 Web UI 开关；
+     - **徽标感知与外观**：刷新间隔、双徽标感知开关、4 态外观 Theme Cubes；
+     - **扩展徽标与会话颜色**：待确认/进行中/已完成 3 角色单层静态柔光色盘（安静不呼吸）+「恢复默认」；
+   - 底部操作栏：双按钮 `[ 保存设置 ]` 与 `[ 取消 ]`。
 
 ### 8.4 日志查看页（logs.html/js/css，M3）
 
@@ -903,12 +917,17 @@ popup 设置面板新增「外观」行（四个互斥选项按钮），复刻 W
 ```
 GET /_manager/sessions          （dsh 配套插件，lifecycle 同款 allow() 围栏；只读幂等）
 200 → { ok: true, items: [ { sessionId, title?, state: 'working'|'waiting'|'completed'|'idle',
-                             updatedAt, blank, cwd?, workspaceId? } ] }
+                             updatedAt, blank, cwd?, workspaceId?,
+                             hasActiveChildren, childRuns: [ { childId, label? } ] } ] }
 403 → 围栏拒绝；404 → 端点未注册（= 插件未装/版本过旧）；405 → 非 GET
 ```
 
+- **契约演进（M11，2026-xx-xx 定稿）**：items 新增 `hasActiveChildren`/`childRuns`（子代理感知）——父会话事件流中 `subagent/start`（runId）无配对 `subagent/end` 即视为活动子代理（官方 dsh-subagent lifecycle 边缘写入父会话日志；配对判据权威：覆盖 cold-resume 新 epoch、孙子代链 end 延迟、中断/取消 end 照发）。`label` 折叠自子代理会话自身 `subagent/descriptor` 事件的 label 字段（无则不返回，客户端降级显示「子代理」）。**origin='subagent' 会话不单独出列**（官方 Web UI 亦隐藏；运行状态归并进父行）。**官方归档对齐**：`ctx.get('workspaceRegistry')?.archivedSessionIds` 命中即过滤；**但已归档且仍有活动子代理的会话保留**（感知优先：工作未真正结束）。workspaceRegistry 缺失部署自然降级为不过滤。
+
 - `state` 映射：`running && pendingInteraction` → `waiting`（等待：批准/问答/计划审查）；`running` → `working`；`completed` → `completed`；其余 → `idle`。**契约仍为 4 态（后端完整语义）；M10.1（2026-08-24 用户定稿）扩展展示层只呈现 3 态**（遵循 Web UI 的区分：进行中/等待/完成——`idle` 不渲染：用户实机观察新会话默认不在列表、未发内容即离开则会话不存在，idle 在 live 集合近零出现，且 Web UI 本体也不区分 idle/completed（统一 data-state=done）；见上「idle 实际存在性注记」）。**字段缺失时降级**：title 不可得 → 会话行显示「会话 #<id 前 8>」；pendingInteraction 不可得 → `waiting` 不可判（仅 working/idle，如实标注）。**内容零读取**：端点只出摘要元数据，不读消息/事件体。
 - 插件包形态：**D1 决策点**——扩展现有 `dsh-lifecycle` 包（同一安装/升级面，推荐）或新包 `dsh-manager-sessions`（语义命名更清晰，但多一个挂载/升级面）。
+
+- **演示层（M11 定稿，UI 走查 V1 落地）**：`state` 契约仍 4 态；展示演进为 **四态感知**——`waiting`(待确认,琥珀黄) > `working`(进行中,蓝) / `completed+hasActiveChildren`(**已停止**,绿,主会话已停但子代理在跑,恒显不受时长/已读约束) > `completed` 无子代理(**已完成**,绿,仅"新鲜"显示);`idle` 不渲染。**新鲜 = 完成时刻距今 ≤ `settings.retentionMins`（默认 30，合法 5~1440，0 = 从不显示已完成）**。**已读机制（本地展示层，不触碰 dsh 数据）**：已完成行 hover 出现「已读」（原地微药丸「已读 · 撤销 3s」，倒计时结束落库 `readSessions`{sessionId:readAt} 并移除行；期内可撤销）；显示判定 `updatedAt > readAt`；会话重新活跃自动重现；再次完成后需再次已读。**子代理行**：父行下方缩进连接线 + 标签(label||「子代理」) + 「进行中」(蓝,shimmer)。排序：待确认 > 进行中/已停止 > 已完成；同组 updatedAt 降序。计数「N 活跃」= 主会话行数（子代理行不单独计数）。徽标口径：有子代理运行归入进行中（蓝 n 优先于完成提醒）。
 
 **扩展侧**：
 - host 新增只读 action `sessions`（§6.3 白名单 + SW `{type:'native'}` 通道复用，无新权限）；经宿主 fetch `http://127.0.0.1:<port>/_manager/sessions`（1.5s 超时，失败静默→会话区显示降级提示）。

@@ -6,6 +6,14 @@
 ## [未发布] - M4 跨平台/跨浏览器（进行中）
 
 ### Added
+- **M11 会话感知升级（2026-08-25，design §8.10 演进「演示层 M11 定稿」）+ M11.1 Popup 空间架构升级（design §8.2，UI 走查定稿）**：
+  - **会话区四态感知**：`waiting`(待确认,琥珀) > `working`(进行中,蓝) / `completed+hasActiveChildren`(**已停止**,绿,恒显) > `completed` 无子代理(**已完成**,绿,仅「新鲜」显示)；idle 不渲染。
+  - **已读机制（本地展示层，不触碰 dsh 数据）**：已完成行 hover 出现「已读」微药丸，「已读 · 撤销 3s」倒计时（期内可撤销），落库 `readSessions{sessionId:readAt}` 并移除行；会话重新活跃自动重现。
+  - **完成会话保留时长**：设置新增 `retentionMins`（默认 30，合法 5~1440，**0 = 从不显示已完成**；`DEFAULT_SETTINGS` 弹出层 + SW 双份一致）。
+  - **子代理感知（插件侧）**：`GET /_manager/sessions` items 新增 `hasActiveChildren`/`childRuns`——父会话事件流 `subagent/start`↔`subagent/end`（runId 配对）折叠活动子代理；label 从子会话 `subagent/descriptor` 折出；`origin='subagent'` 会话不单独出列；**归档对齐**：`workspaceRegistry.archivedSessionIds` 命中即过滤，但已归档且仍有活动子代理的会话保留（感知优先）；资源缺失自然降级。插件单测 **33/33**（新增 4 项）。
+  - **V6 侧边 Rail 导轨模式（380px×270px 严格物理锁定，绝对零抖动）**：左侧 46px 导轨（概览/会话/设置 3 态导航 + 常驻呼吸指示灯 + 会话小黄点）+ 右侧 334px 独立视口（`panel-slide-in` 平滑进场）；官方原生资产库全量接入（`extension/dsh-assets-library.js`——FishLogo 悬停游弋 / BrandBadge[DSH WEB] / StateMatrix 进行中点阵 / 4 态主题图标与全套业务图标，100% 提取自官方 bundle）；官方真实选中态（纯净柔和灰底、无粗框）。
+  - **无回归兼容**：保留全部 DOM ID 契约（legacy 隐藏容器）与 SW / Native 通信链路。
+  - 验收：verify-cdp 新增 M11 段 6 断言（仅新鲜显示 / 已读入口 / 倒计时读秒 / 撤销 / 落库移除 / retention=0 已停止恒显）+ M9/M10 段适配四态/子代理行/排序；插件单测 33/33；`node --check` 全过。**盲审修补（2026-08-25，子代理独立审查后）**：① 徽标刷新间隔输入框 min 与校验口径不一致（允许输 5 但校验/SW 均按 30 起）→ 统一 min=30；② 已读倒计时等待态样式类 `is-pending-undo` 定义了但从未应用 → 渲染时按 `pendingReadMap` 补加；③ AGENTS.md M11.1 条目尺寸/术语与实现对齐（380×270 / 46px / 334px / `panel-slide-in`）。
 - **M10 颜色语义自定义 + M10.1 定稿（2026-08-24，design §8.12；UI 区名「颜色角色」，术语=语义色 semantic color）**：设置「界面」分组新增「颜色角色」区——
   `waiting/working/completed` 三角色每行「语义标签 + 当前色点 + 6 个预设圆形 swatch
   （蓝/琥珀/紫/绿/红/灰）」点选即生效（同 theme-cube 交互 + 行内方向键导航）+「恢复默认色板」；

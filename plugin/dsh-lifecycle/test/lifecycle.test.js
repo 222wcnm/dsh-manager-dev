@@ -293,11 +293,12 @@ function makeSession({ id = 'session-1', events = [], header = {} } = {}) {
 }
 
 // A ctx whose ctx.get resolves the sessions/agents services for the endpoint.
-function makeCtxWithSessions({ sessions = [], agents = {} } = {}) {
+function makeCtxWithSessions({ sessions = [], agents = {}, workspaceRegistry } = {}) {
   const base = makeCtx()
   base.ctx.get = (name) => {
     if (name === 'sessions') return { list: () => sessions }
     if (name === 'agents') return { get: (id) => agents[id] }
+    if (name === 'workspaceRegistry') return workspaceRegistry
     return undefined
   }
   return base
@@ -427,4 +428,86 @@ test('sessions enforces the same loopback fence: non-loopback address answers 40
     remoteAddress: '203.0.113.7',
   }))
   assert.equal(status, 403)
+})
+
+// ---- 子代理感知(M11):subagent/start ↔ subagent/end 配对折叠 ----
+
+test('sessions folds active children: unpaired subagent/start yields childRuns with label', async () => {
+  const sessions = [
+    makeSession({
+      id: 's-parent',
+      events: [
+        ev('turn/start'),
+        ev('turn/end'),
+        ev('subagent/start', { runId: 'run-1', id: 'child-1', provider: 'subagent', local: true }),
+        ev('subagent/start', { runId: 'run-2', id: 'child-2', provider: 'subagent', local: true }),
+        ev('subagent/end', { runId: 'run-2', id: 'child-2', stopReason: 'completed' }),
+      ],
+    }),
+    makeSession({
+      id: 'child-1',
+      header: { origin: 'subagent', cwd: 'D:\\w' },
+      events: [ev('subagent/descriptor', { version: 1, mode: 'continuable', provider: 'subagent', label: '检索代码' })],
+    }),
+  ]
+  const { ctx, routes } = makeCtxWithSessions({ sessions })
+  const { status, body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  assert.equal(status, 200)
+  const items = JSON.parse(body).items
+  const parent = items.find((item) => item.sessionId === 's-parent')
+  assert.equal(parent.state, 'completed')
+  assert.equal(parent.hasActiveChildren, true)
+  assert.deepEqual(parent.childRuns, [ { childId: 'child-1', label: '检索代码' } ])
+})
+
+test('sessions hides subagent sessions from the top-level list', async () => {
+  const sessions = [
+    makeSession({ id: 's-main', events: [ev('turn/end')] }),
+    makeSession({ id: 'child-x', header: { origin: 'subagent' }, events: [ev('subagent/descriptor', { label: 'x' })] }),
+  ]
+  const { ctx, routes } = makeCtxWithSessions({ sessions })
+  const { body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  const ids = JSON.parse(body).items.map((item) => item.sessionId)
+  assert.deepEqual(ids, ['s-main'])
+})
+
+test('sessions filters archived sessions but keeps archived sessions with running children', async () => {
+  const sessions = [
+    makeSession({ id: 's-arch-done', events: [ev('turn/end')] }),
+    makeSession({
+      id: 's-arch-child',
+      events: [
+        ev('turn/end'),
+        ev('subagent/start', { runId: 'run-a', id: 'child-a', provider: 'subagent', local: true }),
+      ],
+    }),
+    makeSession({ id: 's-live', events: [ev('turn/end')] }),
+    makeSession({ id: 'child-a', header: { origin: 'subagent' } }),
+  ]
+  const workspaceRegistry = { archivedSessionIds: ['s-arch-done', 's-arch-child'] }
+  const { ctx, routes } = makeCtxWithSessions({ sessions, workspaceRegistry })
+  const { body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  const byId = new Map(JSON.parse(body).items.map((item) => [item.sessionId, item]))
+  assert.equal(byId.has('s-arch-done'), false)
+  assert.equal(byId.has('s-live'), true)
+  assert.equal(byId.has('s-arch-child'), true)
+  assert.equal(byId.get('s-arch-child').hasActiveChildren, true)
+})
+
+test('sessions defaults: completed childRuns empty when every start is paired', async () => {
+  const sessions = [
+    makeSession({
+      id: 's-settled-child',
+      events: [
+        ev('turn/end'),
+        ev('subagent/start', { runId: 'run-1', id: 'c1', provider: 'subagent', local: true }),
+        ev('subagent/end', { runId: 'run-1', id: 'c1', stopReason: 'completed' }),
+      ],
+    }),
+  ]
+  const { ctx, routes } = makeCtxWithSessions({ sessions })
+  const { body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  const [item] = JSON.parse(body).items
+  assert.equal(item.hasActiveChildren, false)
+  assert.deepEqual(item.childRuns, [])
 })

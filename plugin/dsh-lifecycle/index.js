@@ -105,15 +105,59 @@ function hasPendingInteraction(events) {
   return false
 }
 
+// Active subagent children of ONE parent session, folded from the parent's own
+// event stream. The official subagent seam publishes `subagent/start` /
+// `subagent/end` (same runId) INTO the parent session's log (dsh-subagent
+// lifecycle emitter keyed by the delegating parent), so pairing runIds is the
+// authoritative lifetime signal — it survives cold-resume (a fresh epoch
+// publishes fresh edges), covers descendant chains (a child's `end` fires only
+// after all of its own descendants settled), and needs no agents-service
+// polling.
+function activeChildIds(events) {
+  const started = new Map() // runId -> child session id
+  const ended = new Set() // runIds that settled
+  for (const event of events) {
+    if (event.type === 'subagent/start') {
+      const runId = event.data?.runId
+      const childId = event.data?.id
+      if (typeof runId === 'string' && typeof childId === 'string') started.set(runId, childId)
+    } else if (event.type === 'subagent/end') {
+      const runId = event.data?.runId
+      if (typeof runId === 'string') ended.add(runId)
+    }
+  }
+  const ids = new Set()
+  for (const [runId, childId] of started) if (!ended.has(runId)) ids.add(childId)
+  return [...ids]
+}
+
+// Fold the child's task label out of its own `subagent/descriptor` event (the
+// durable, model-hidden composition record). The first descriptor is
+// authoritative; `label` is optional by contract.
+function foldChildLabel(events) {
+  for (const event of events) {
+    if (event.type !== 'subagent/descriptor') continue
+    const label = event.data?.label
+    if (typeof label === 'string' && label.length > 0) return label
+  }
+  return undefined
+}
+
 // Derive the four-state session summary the extension renders
 // (docs/design.md §8.10): waiting > working > completed > idle.
-function summarizeSession(session, agents) {
+function summarizeSession(session, agents, childLabelBy) {
   const events = session.events ?? []
   const running = agents?.get?.(session.id)?.status === 'running'
   let state = 'idle'
   if (hasPendingInteraction(events)) state = 'waiting'
   else if (running) state = 'working'
   else if (events.some((event) => event.type === 'turn/end')) state = 'completed'
+  const childRuns = activeChildIds(events).map((childId) => ({
+    childId,
+    ...(childLabelBy?.get?.(childId) !== undefined
+      ? { label: childLabelBy.get(childId) }
+      : {}),
+  }))
   let updatedAt
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const time = events[i]?.time
@@ -129,6 +173,8 @@ function summarizeSession(session, agents) {
     state,
     updatedAt,
     blank,
+    hasActiveChildren: childRuns.length > 0,
+    childRuns,
     ...(session.header?.cwd !== undefined ? { cwd: session.header.cwd } : {}),
   }
 }
@@ -211,10 +257,36 @@ export function apply(ctx) {
           return
         }
         const agents = ctx.get('agents')
+        // Official workspace registry (registry-global archive set). Absent on
+        // deployments without the workspace plugin — degrade to no filtering.
+        // Archived sessions are hidden from every grouping surface; an archived
+        // session with RUNNING children still shows (perception wins — the work
+        // is not actually finished), while archive masters without children hide.
+        const workspaceRegistry = ctx.get('workspaceRegistry')
+        const archivedIds = (workspaceRegistry && Array.isArray(workspaceRegistry.archivedSessionIds))
+          ? new Set(workspaceRegistry.archivedSessionIds)
+          : null
+        const live = sessions.list()
+        // Subagent label index: live child sessions (origin='subagent') fold
+        // their own descriptor label; child runs not otherwise labelable fall
+        // back to no label (the client renders '子代理').
+        const childLabelBy = new Map()
+        for (const child of live) {
+          if (!child || typeof child !== 'object') continue
+          if (child.header?.origin !== 'subagent') continue
+          const label = foldChildLabel(child.events ?? [])
+          if (label !== undefined) childLabelBy.set(child.id, label)
+        }
         const items = []
-        for (const session of sessions.list()) {
+        for (const session of live) {
+          if (!session || typeof session !== 'object') continue
+          // Subagent sessions never appear as top-level rows: their running
+          // state is folded into the parent's childRuns (webui hides them too).
+          if (session.header?.origin === 'subagent') continue
           try {
-            items.push(summarizeSession(session, agents))
+            const summary = summarizeSession(session, agents, childLabelBy)
+            if (archivedIds !== null && archivedIds.has(session.id) && summary.childRuns.length === 0) continue
+            items.push(summary)
           } catch {
             // One malformed session must never take down the whole listing.
           }

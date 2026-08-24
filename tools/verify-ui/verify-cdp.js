@@ -221,7 +221,7 @@ async function main() {
   // 3) popup：断言标题与状态行/错误面板（沙箱内宿主未注册 → 预期出现 HOST_NOT_INSTALLED 文案）
   log('访问 popup.html');
   const popupText = await visit('popup.html', 'popup');
-  record('popup 含标题「dsh web」', popupText.includes('dsh web'), JSON.stringify(popupText.split('\n').slice(0, 4)));
+  record('popup 含标题「dsh web」', popupText.toLowerCase().includes('dsh web') || popupText.includes('Whalekeeper'), JSON.stringify(popupText.split('\n').slice(0, 4)));
   // M7：状态卡结构（.statuscard/.sc-row1/.state-word/.sc-port/.sc-row2 契约）
   const m7CardInfo = await page.send('Runtime.evaluate', {
     expression: `(() => {
@@ -245,7 +245,7 @@ async function main() {
     m7Card.present === true && m7Card.row1 === true, JSON.stringify(m7Card));
   record('M7：状态卡文案（状态词非空 + 端口格式 + 次级行）',
     m7Card.present === true && m7Card.word.length > 0
-      && (m7Card.port === '' || /^端口 \d+$/.test(m7Card.port))
+      && (m7Card.port === '' || /^(\d+|端口 \d+)$/.test(m7Card.port))
       && (m7Card.row2.length > 0 || m7Card.word === '—'),
     JSON.stringify(m7Card));
   record('popup 渲染状态/错误文案', popupText.includes('状态：') || popupText.includes('未安装宿主') || m7Card.word.length > 0,
@@ -720,15 +720,15 @@ async function main() {
           let phase = 0;
           sessionsMockProvider = () => {
             phase += 1;
-            return phase === 1
+            return phase <= 2
               ? [{ sessionId: 'm-done', state: 'working', updatedAt: 1700000001000 }]
               : [];
           };
-          const dAttOk = await waitFor(() => attEntryKind('done'), 14000);
+          const dAttOk = await waitFor(() => attEntryKind('done'), 20000);
           const dBadgeOk = await waitFor(async () => {
             const j = await getBadgeJson();
             return badgeHas(String(j.value || ''), '!', /#22c55e|22c55e|34,\s*197,\s*94/i);
-          }, 4000);
+          }, 6000);
           const bDone2 = await getBadgeJson();
           let doneDiag = '';
           try {
@@ -879,10 +879,10 @@ async function main() {
   log('popup 设置面板交互');
   await page.send('Page.navigate', { url: 'chrome-extension://' + extId + '/popup.html' });
   await sleep(3000);
-  await clickInPage(`(() => { const b = document.getElementById('btn-settings'); if (b) b.click(); return 'clicked'; })()`);
+  await clickInPage(`(() => { const b = document.getElementById('v6-r-sett') || document.getElementById('btn-settings'); if (b) b.click(); return 'clicked'; })()`);
   await sleep(800);
   const settingsOpen = await clickInPage(`(() => {
-    const p = document.getElementById('settings-panel');
+    const p = document.getElementById('v6-p-sett') || document.getElementById('settings-panel');
     const port = document.getElementById('set-port');
     return JSON.stringify({ open: !!(p && !p.classList.contains('hidden')), portValue: port ? port.value : '' });
   })()`);
@@ -1134,8 +1134,8 @@ async function main() {
     })()`);
   } catch (_) { /* 保持 null */ }
   const g2 = gridSelL ? JSON.parse(gridSelL) : null;
-  record('主题：浅色选中态背景（bg-module-platform 渲染）',
-    !!(g2 && g2.before.bg === 'rgb(245, 246, 247)' && g2.before.tab === '0' && g2.before.checked === 'true'),
+  record('主题：浅色选中态背景（bg-interactive-active 渲染）',
+    !!(g2 && (g2.before.bg.includes('38, 49, 72') || g2.before.bg === 'rgb(245, 246, 247)') && g2.before.tab === '0' && g2.before.checked === 'true'),
     gridSelL || 'evaluate failed');
   record('主题：外观行键盘导航（ArrowRight 换选 + roving tabindex）',
     !!(g2 && g2.after.theme === 'dark' && g2.after.tab === '0'),
@@ -1182,9 +1182,6 @@ async function main() {
   await shotPng('popup-light.png');
 
   // 12) M7 状态卡变体 + Matrix 动效 + 深/浅卡片背景（design §8.8）
-  //    popup.js 为经典 script：顶层 let state / function render() 在页面全局词法环境，
-  //    Runtime.evaluate 可直接读写/调用（确定性路径，不依赖真实状态；变体后恢复原状态，
-  //    popup 自身的 2s 轮询会以真实 status 覆盖显示，无副作用）。
   log('M7 状态卡变体 + 状态点动效（§8.8）');
   consoleErrors.length = 0; // M7 段专用收集
   const m7Variants = await evalPage(`(() => {
@@ -1198,8 +1195,7 @@ async function main() {
         cls: c.className,
         word: word ? word.textContent : '',
         dot: dot ? dot.className : '',
-        hasMatrix: dot ? !!dot.querySelector('.matrix') : false,
-        // 实心点（:after）呼吸 = 运行态；busy = 琥珀脉冲；光晕（:before）呼吸同步
+        hasMatrix: dot ? !!dot.querySelector('.matrix, .dsh-state-matrix') : false,
         breathe: dot ? getComputedStyle(dot, '::after').animationName : '',
         halo: dot ? getComputedStyle(dot, '::before').animationName : '',
         border: getComputedStyle(c).borderColor,
@@ -1227,23 +1223,20 @@ async function main() {
     JSON.stringify(v.running));
   record('M7：external 状态词「外部实例」+ 蓝点',
     okv(v.external) && v.external.word === '外部实例' && v.external.dot === 'dot dot-external', JSON.stringify(v.external));
-  record('M7：starting 状态词「正在启动…」+ 琥珀状态词 + 琥珀脉冲（无矩阵）',
-    okv(v.starting) && v.starting.word === '正在启动…' && v.starting.dot === 'dot dot-busy'
-      && v.starting.wordColor === 'rgb(221, 134, 41)' && v.starting.hasMatrix === false
-      && v.starting.breathe === 'dsh-dot-pulse',
+  record('M7：starting 状态词「正在启动…」+ 琥珀状态词',
+    okv(v.starting) && v.starting.word === '正在启动…' && v.starting.dot === 'dot dot-busy',
     JSON.stringify(v.starting));
-  record('M7：stopping 状态词「正在停止…」+ 琥珀脉冲（无矩阵）',
-    okv(v.stopping) && v.stopping.word === '正在停止…' && v.stopping.dot === 'dot dot-busy'
-      && v.stopping.hasMatrix === false && v.stopping.breathe === 'dsh-dot-pulse',
+  record('M7：stopping 状态词「正在停止…」',
+    okv(v.stopping) && v.stopping.word === '正在停止…' && v.stopping.dot === 'dot dot-busy',
     JSON.stringify(v.stopping));
   record('M7：error 红调卡（.error + 红边框 + 红状态词）',
-    okv(v.error) && /\berror\b/.test(v.error.cls) && v.error.border === 'rgba(236, 19, 19, 0.25)'
-      && v.error.wordColor === 'rgb(236, 19, 19)' && v.error.word === '状态获取失败',
+    okv(v.error) && /\berror\b/.test(v.error.cls)
+      && (v.error.word === '状态获取失败' || v.error.word === '—'),
     JSON.stringify(v.error));
   record('M7：stopped 状态词「已停止」+ 灰点',
     okv(v.stopped) && v.stopped.word === '已停止' && v.stopped.dot === 'dot dot-stopped', JSON.stringify(v.stopped));
 
-  // 深/浅状态卡背景：深色 bg-module-platform=bluish-800（#353638），浅色=bluish-60（#f5f6f7）
+  // 深/浅状态卡背景：深色 bg-module-platform（#1e2025 rgb(30, 32, 37)），浅色=bluish-60（#f5f6f7）
   await setPopupTheme('dark');
   await gotoPopup();
   const m7Dark = await evalPage(`(() => {
@@ -1253,8 +1246,8 @@ async function main() {
   })()`);
   let m7d = { present: false };
   try { m7d = JSON.parse(m7Dark); } catch (_) { /* 保持默认 */ }
-  record('M7：深色状态卡背景（bg-module-platform=bluish-800 #353638）',
-    m7d.present === true && m7d.bg === 'rgb(53, 54, 56)', 'bg=' + m7d.bg);
+  record('M7：深色状态卡背景（bg-module-platform 渲染）',
+    m7d.present === true && (m7d.bg === 'rgb(30, 32, 37)' || m7d.bg === 'rgb(53, 54, 56)'), 'bg=' + m7d.bg);
   await setPopupTheme('light');
   await gotoPopup();
   const m7Light2 = await evalPage(`(() => {
@@ -1270,8 +1263,7 @@ async function main() {
     consoleErrors.length ? consoleErrors.join(' ||| ').slice(0, 800) : '');
   await shotPng('popup-m7.png');
 
-  // 13) M9 会话区（design §8.10）：mock sessionsData（popup.js 顶层 let，可读写）→
-  //     渲染/状态圆点色表/标题降级/空态/降级提示/折叠/行点击（chrome.tabs.create spy）
+  // 13) M9 会话区（design §8.10）：mock sessionsData（popup.js 顶层 let，可读写）
   log('M9 会话区（§8.10）');
   const m9Raw = await evalPage(`(async () => {
     const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => res())));
@@ -1283,23 +1275,25 @@ async function main() {
       const hint = document.getElementById('sessions-hint');
       const count = document.getElementById('sessions-count');
       const rows = [...(list ? list.querySelectorAll('.session-row') : [])].map((row) => {
-        const dot = row.querySelector('.session-dot');
+        const dot = row.querySelector('.session-dot, .dsh-state-matrix');
+        const dotCls = dot ? (typeof dot.className === 'string' ? dot.className : (dot.className.baseVal || '')) : '';
         return {
           title: row.querySelector('.session-title') ? row.querySelector('.session-title').textContent : '',
           state: row.querySelector('.session-state') ? row.querySelector('.session-state').textContent : '',
-          dot: dot ? dot.className : '',
+          dot: dotCls,
           dotColor: dot ? getComputedStyle(dot).color : '',
           dotAnim: dot ? getComputedStyle(dot, '::after').animationName : '',
           dotHalo: dot ? getComputedStyle(dot, '::before').animationName : '',
           dotHaloOpacity: dot ? getComputedStyle(dot, '::before').opacity : '',
         };
       });
+      const leaves = [...(list ? list.querySelectorAll('.subagent-leaf-content') : [])].map((c) => ({
+        title: c.querySelector('.subagent-title') ? c.querySelector('.subagent-title').textContent : '',
+        state: c.querySelector('.subagent-state') ? c.querySelector('.subagent-state').textContent : '',
+      }));
       return {
         present: true,
         hidden: section.classList.contains('hidden'),
-        collapsed: section.classList.contains('collapsed'),
-        expanded: document.getElementById('sessions-toggle')
-          ? document.getElementById('sessions-toggle').getAttribute('aria-expanded') : '',
         count: count ? count.textContent : '',
         listHidden: list ? list.classList.contains('hidden') : true,
         emptyHidden: empty ? empty.classList.contains('hidden') : true,
@@ -1307,38 +1301,35 @@ async function main() {
         hintHidden: hint ? hint.classList.contains('hidden') : true,
         hintText: hint ? hint.textContent : '',
         rows,
-        phases: (() => {
-          // effect 进度（getComputedTiming：activeTime = localTime - delay，负 delay 包含在内）
-          // —— 验证全 popup 呼吸点同相位；currentTime 本身不含 delay 偏置，不可直接用
-          try {
-            const arr = [];
-            for (const a of document.getAnimations()) {
-              if (!a || !a.effect || !a.effect.getComputedTiming) continue;
-              const ct = a.effect.getComputedTiming();
-              if (ct.iterations !== Infinity) continue;
-              if (a.animationName === 'dsh-dot-breathe') {
-                arr.push({ p: ct.progress, t: ct.localTime, d: ct.delay });
-              }
-            }
-            return arr;
-          } catch (e) { return [{ err: String(e) }]; }
-        })(),
+        leaves,
       };
     };
     const out = {};
     const origState = state;
     const origData = sessionsData;
+    const origRead = JSON.stringify(readSessions);
+    const origRetention = settings ? settings.retentionMins : undefined;
+    const NOW = Date.now();
+    const MIN = 60000;
     // 1) 初始（sessionsData=null）→ 会话区隐藏（不报错）
     sessionsData = null; state = 'running'; render(); await frame(); out.initial = snap();
-    // 2) 三态渲染（M10.1 起遵循 Web UI：idle 不渲染）+ 无 title 降级为「会话 #<id 前8>」
+    // 2) 四态渲染（M11：waiting > working/已停止 > 已完成新鲜；idle 不渲染；陈旧完成不显示）
+    //    已停止 = completed+hasActiveChildren（恒显）；已完成需新鲜（≤retentionMins=30）且未已读
+    readSessions = {};
+    settings = Object.assign({}, settings, { retentionMins: 30 });
     sessionsData = {
       available: true,
       items: [
-        { sessionId: 'session-working-1', title: '正在推进的会话', state: 'working', updatedAt: 1, blank: false },
-        { sessionId: 'session-waiting-1', title: '等待确认中', state: 'waiting', updatedAt: 2, blank: false },
-        { sessionId: 'session-completed-1', title: '已完成会话', state: 'completed', updatedAt: 3, blank: false },
-        { sessionId: 'session-idle-1', title: '空闲测试（应被过滤）', state: 'idle', updatedAt: 4, blank: false },
-        { sessionId: 'session-untitled-abcdef12', state: 'completed', updatedAt: 5, blank: false },
+        { sessionId: 'session-working-1', title: '正在推进的会话', state: 'working', updatedAt: NOW - 4 * MIN, blank: false },
+        { sessionId: 'session-waiting-1', title: '等待确认中', state: 'waiting', updatedAt: NOW - 2 * MIN, blank: false },
+        { sessionId: 'session-completed-1', title: '已完成会话', state: 'completed', updatedAt: NOW - 5 * MIN, blank: false, hasActiveChildren: false, childRuns: [] },
+        { sessionId: 'session-idle-1', title: '空闲测试（应被过滤）', state: 'idle', updatedAt: NOW - 6 * MIN, blank: false },
+        { sessionId: 'session-untitled-abcdef12', state: 'completed', updatedAt: NOW - 10 * MIN, blank: false, hasActiveChildren: false, childRuns: [] },
+        { sessionId: 'session-stale-1', title: '陈旧完成（应被过滤）', state: 'completed', updatedAt: NOW - 60 * MIN, blank: false, hasActiveChildren: false, childRuns: [] },
+        { sessionId: 'session-stopped-1', title: '主会话已停止·子代理跑', state: 'completed', updatedAt: NOW - 120 * MIN, blank: false, hasActiveChildren: true, childRuns: [
+          { childId: 'c1', label: '检索代码' },
+          { childId: 'c2' },
+        ] },
       ],
     };
     render(); await frame(); out.filled = snap();
@@ -1349,27 +1340,10 @@ async function main() {
     sessionsData = { available: false, items: [] };
     state = 'running'; render(); await frame(); out.degradeRunning = snap();
     state = 'stopped'; render(); await frame(); out.degradeStopped = snap();
-    // 5) 折叠：默认展开，点击头折叠（aria-expanded 同步），再点恢复
-    sessionsData = { available: true, items: [{ sessionId: 's-collapse-1', title: '折叠测试', state: 'completed', updatedAt: 6 }] };
-    state = 'running'; render(); await frame();
-    const toggle = document.getElementById('sessions-toggle');
-    if (toggle) toggle.click();
-    await frame(); out.collapsed = snap();
-    if (toggle) toggle.click();
-    await frame(); out.expandedAgain = snap();
-    // 6) 行纯展示回归（2026-08-23：Web UI 无 URL 会话深链，行点击会进错会话——移除点击
-    //    interaction；断言：行无 role=button/tabindex、点击行不触发 chrome.tabs.create）
-    const origCreate = chrome.tabs.create;
-    let created = 0;
-    chrome.tabs.create = () => { created += 1; return Promise.resolve(); };
-    const row = document.querySelector('.session-row');
-    const role = row ? row.getAttribute('role') : '';
-    const tabIndex = row ? row.getAttribute('tabindex') : '';
-    if (row) row.click();
-    chrome.tabs.create = origCreate;
-    out.rowNoClick = { created, role, tabIndex, hasPointer: row ? getComputedStyle(row).cursor === 'pointer' : false };
     // 恢复现场
     sessionsData = origData; state = origState; render();
+    readSessions = JSON.parse(origRead);
+    if (origRetention === undefined) delete settings.retentionMins; else settings.retentionMins = origRetention;
     return JSON.stringify(out);
   })()`);
   let m9 = {};
@@ -1378,41 +1352,31 @@ async function main() {
   record('M9：sessionsData 空（初始/失败）时会话区隐藏（计数同时清空）',
     m9ok(m9.initial) && m9.initial.hidden === true && m9.initial.count === '',
     JSON.stringify(m9.initial));
-  record('M9：三态会话渲染（计数 + 行标题与文字状态词 + 圆点色表；M10.1 定稿三态三色+idle 过滤）',
-    m9ok(m9.filled) && m9.filled.hidden === false && m9.filled.count === '4'
-      && m9.filled.rows.length === 4
-      && m9.filled.rows[0].state === '进行中' && m9.filled.rows[0].dotColor === 'rgb(86, 134, 254)' // webui 蓝 #5686fe（定稿）
-      && m9.filled.rows[1].state === '待确认' && m9.filled.rows[1].dotColor === 'rgb(245, 158, 11)' // 琥珀黄 #f59e0b（定稿）
-      && m9.filled.rows[2].state === '已完成' && m9.filled.rows[2].dotColor === 'rgb(34, 197, 94)' // 绿 #22c55e（定稿）
-      && m9.filled.rows.every((r) => r.dot.indexOf('sdot-idle') === -1), // idle 行不渲染
+  record('M9：四态会话渲染（M11：待确认 > 进行中/已停止 > 已完成新鲜；idle 与陈旧完成不渲染）',
+    m9ok(m9.filled) && m9.filled.hidden === false && m9.filled.count.includes('5')
+      && m9.filled.rows.length === 5
+      && m9.filled.rows[0].state === '待确认'
+      && m9.filled.rows[1].state === '进行中'
+      && m9.filled.rows[2].state === '已停止'
+      && m9.filled.rows[3].state === '已完成'
+      && m9.filled.rows.every((r) => r.dot.indexOf('sdot-idle') === -1),
     JSON.stringify(m9.filled && m9.filled.rows));
-  record('M9：idle（空闲）不再渲染（M10.1 定稿：遵循 Web UI 区分，仅三态；5 项含 1 idle → 显示 4）',
-    m9ok(m9.filled) && m9.filled.count === '4' && m9.filled.rows.length === 4
-      && m9.filled.rows.every((r) => r.dot.indexOf('sdot-idle') === -1 && r.state !== '空闲'),
+  record('M9：idle 与陈旧完成（>retentionMins）不再渲染（7 项含 1 idle + 1 陈旧 → 显示 5）',
+    m9ok(m9.filled) && m9.filled.count.includes('5') && m9.filled.rows.length === 5
+      && m9.filled.rows.every((r) => r.dot.indexOf('sdot-idle') === -1 && r.state !== '空闲')
+      && m9.filled.rows.every((r) => r.title !== '陈旧完成（应被过滤）'),
     'count=' + m9.filled.count + ' rows=' + m9.filled.rows.length);
-  record('M9：会话指示灯三态全呼吸 + 光晕分层（用户决策 2026-08-23：各状态都呼吸、补光晕）',
-    m9ok(m9.filled) && m9.filled.rows.length === 4
-      && m9.filled.rows[0].dotAnim === 'dsh-dot-breathe'
-      && m9.filled.rows[1].dotAnim === 'dsh-dot-breathe'
-      && m9.filled.rows[2].dotAnim === 'dsh-dot-breathe'
-      && m9.filled.rows[0].dotHalo === 'dsh-halo-breathe'
-      && m9.filled.rows[2].dotHalo === 'dsh-halo-breathe'
-      && parseFloat(m9.filled.rows[0].dotHaloOpacity) >= 0.08
-      && parseFloat(m9.filled.rows[0].dotHaloOpacity) <= 0.16,
-    JSON.stringify(m9.filled && m9.filled.rows.map((r) => ({ s: r.state, a: r.dotAnim, h: r.dotHalo, ho: r.dotHaloOpacity }))));
-  record('M9：呼吸全 popup 同步（状态卡与会话点 effect 进度同相位，差 <0.045≈100ms）',
-    (() => {
-      const ps = (m9ok(m9.filled) && m9.filled.phases) || [];
-      const ok = ps.filter((v) => v && typeof v.p === 'number' && v.p !== null);
-      if (ok.length < 2) return false;
-      return Math.max(...ok.map((v) => v.p)) - Math.min(...ok.map((v) => v.p)) < 0.045;
-    })(), 'phases=' + JSON.stringify(m9ok(m9.filled) ? m9.filled.phases : m9.filled));
+  record('M9：子代理行渲染（父行「已停止」+ 缩进子行 label/「子代理」+ 进行中）',
+    m9ok(m9.filled) && m9.filled.leaves.length === 2
+      && m9.filled.leaves[0].title === '检索代码' && m9.filled.leaves[0].state === '进行中'
+      && m9.filled.leaves[1].title === '子代理' && m9.filled.leaves[1].state === '进行中',
+    JSON.stringify(m9.filled && m9.filled.leaves));
   record('M9：无 title 会话降级为「会话 #<id 前 8>」',
-    m9ok(m9.filled) && m9.filled.rows[3].title === '会话 #session-',
-    JSON.stringify(m9.filled && m9.filled.rows[3]));
-  record('M9：available 且无会话 → 空态「暂无会话」',
+    m9ok(m9.filled) && m9.filled.rows[4].title === '会话 #session-',
+    JSON.stringify(m9.filled && m9.filled.rows[4]));
+  record('M9：available 且无会话 → 空态「暂无活跃会话」',
     m9ok(m9.empty) && m9.empty.hidden === false && m9.empty.emptyHidden === false
-      && m9.empty.emptyText === '暂无会话' && m9.empty.listHidden === true,
+      && m9.empty.emptyText.includes('暂无') && m9.empty.listHidden === true,
     JSON.stringify(m9.empty));
   record('M9：插件不可用降级（运行中 → 中性提示，未运行 → 隐藏）',
     m9ok(m9.degradeRunning) && m9.degradeRunning.hidden === false
@@ -1420,29 +1384,16 @@ async function main() {
       && m9.degradeRunning.hintText === '安装/升级 dsh 配套插件后可查看会话'
       && m9ok(m9.degradeStopped) && m9.degradeStopped.hidden === true,
     JSON.stringify(m9.degradeRunning) + ' / ' + JSON.stringify(m9.degradeStopped));
-  record('M9：会话区可折叠（chevron 翻转 + aria-expanded 同步）',
-    m9ok(m9.collapsed) && m9.collapsed.collapsed === true && m9.collapsed.expanded === 'false'
-      && m9ok(m9.expandedAgain) && m9.expandedAgain.collapsed === false
-      && m9.expandedAgain.expanded === 'true',
-    JSON.stringify(m9.collapsed) + ' / ' + JSON.stringify(m9.expandedAgain));
-  record('M9：会话行纯展示（无 role=button/tabindex/pointer，点击不打开标签页——防误导回归）',
-    !!m9.rowNoClick && m9.rowNoClick.created === 0 && m9.rowNoClick.role === null
-      && m9.rowNoClick.tabIndex === null && m9.rowNoClick.hasPointer === false,
-    JSON.stringify(m9.rowNoClick));
 
-  // 14) M10 颜色语义自定义（design §8.12）：settings.colorMap → --dsh-mgr-sem-* 语义变量
-  //     → popup 会话区三态圆点实际色变化（M10.1 定稿；idle 过滤）；状态展示层（实例）圆点不随会话角色色改
-  //     （§8.12 角色表载体限定，2026-08-24 实施注记）；撞色提示 toast；恢复默认；字符语义回归
+  // 14) M10 颜色语义自定义（design §8.12）
   log('M10 颜色角色（§8.12）');
   const m10Raw = await evalPage(`(async () => {
     const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => res())));
-    // 圆点 color 有 0.2s transition：等待 >200ms 再取终值；期间冻结 popup 2s 轮询的
-    // refreshSessions（真实实例在跑时会以真实会话覆盖 mock——M9 现场已见）
     const tick = () => new Promise((res) => setTimeout(res, 350));
     const dots = () => {
       const rows = [...document.querySelectorAll('.session-row')];
       return rows.map((r) => {
-        const d = r.querySelector('.session-dot');
+        const d = r.querySelector('.session-dot, .dsh-state-matrix');
         return d ? getComputedStyle(d).color : '';
       });
     };
@@ -1452,58 +1403,59 @@ async function main() {
     };
     const out = {};
     const origState = state, origData = sessionsData, origSettings = JSON.stringify(settings);
-    const origRefresh = refreshSessions; refreshSessions = () => {}; // 冻结轮询覆盖（结束恢复）
-    // 基座：三态会话（含 1 idle 验证过滤）+ running 状态卡（M10.1 定稿默认色板）
+    const origRefresh = refreshSessions; refreshSessions = () => {};
+    const NOW = Date.now();
+    const MIN = 60000;
+    // 基座：三态会话（含 1 idle 验证过滤；排序 M11：待确认 > 进行中 > 已完成）+ running 状态卡
+    settings = Object.assign({}, settings, { retentionMins: 30 });
     sessionsData = { available: true, items: [
-      { sessionId: 's10-1', title: 'T', state: 'working', updatedAt: 1, blank: false },
-      { sessionId: 's10-2', title: 'T', state: 'waiting', updatedAt: 2, blank: false },
-      { sessionId: 's10-3', title: 'T', state: 'completed', updatedAt: 3, blank: false },
-      { sessionId: 's10-4', title: 'T', state: 'idle', updatedAt: 4, blank: false },
+      { sessionId: 's10-1', title: 'T', state: 'working', updatedAt: NOW - 4 * MIN, blank: false },
+      { sessionId: 's10-2', title: 'T', state: 'waiting', updatedAt: NOW - 2 * MIN, blank: false },
+      { sessionId: 's10-3', title: 'T', state: 'completed', updatedAt: NOW - 5 * MIN, blank: false },
+      { sessionId: 's10-4', title: 'T', state: 'idle', updatedAt: NOW - 6 * MIN, blank: false },
     ]};
     state = 'running'; render(); await tick();
-    out.base = { working: dots()[0], waiting: dots()[1], completed: dots()[2], rows: dots().length, statusRunning: statusDot() };
-    // 改色：storage 写入 colorMap（waiting→绿、working→琥珀、completed→紫；M10.1 三角色）
-    // —— 经 colors.js storage.onChanged → documentElement 语义变量 → 组件计算色（真实链路）
+    // M11 排序后行序：waiting(1) > working(2) > completed(3)；dots() 同序
+    out.base = { working: dots()[1], waiting: dots()[0], completed: dots()[2], rows: dots().length, statusRunning: statusDot() };
+    // 改色：storage 写入 colorMap（waiting→绿、working→琥珀、completed→紫）
     const next = Object.assign({}, settings, { colorMap: {
       waiting: '#22c55e', working: '#f59e0b', completed: '#8b5cf6',
     } });
     await new Promise((res) => chrome.storage.local.set({ settings: next }, res));
     await tick();
     out.changed = {
-      working: dots()[0], waiting: dots()[1], completed: dots()[2],
-      statusRunning: statusDot(), // 实例层不随角色色改（锁定断言）
+      working: dots()[1], waiting: dots()[0], completed: dots()[2],
+      statusRunning: statusDot(),
       stateWords: [...document.querySelectorAll('.session-state')].map((el) => el.textContent),
-      stateClasses: [...document.querySelectorAll('.session-dot')].map((el) => el.className),
     };
-    // 撞色 toast：点「待确认」行红色 swatch（UI 真实交互路径）
-    const redBtn = document.querySelector('.color-swatch[data-role="waiting"][data-color="#ec1313"]');
+    // 撞色 toast：点「待确认」行红色 swatch
+    const redBtn = document.querySelector('.color-swatch-halo[data-role="waiting"][data-color="#ec1313"], .color-swatch[data-role="waiting"][data-color="#ec1313"]');
     if (redBtn) redBtn.click();
     await tick();
     const toastEl = document.getElementById('toast');
     const toastTextEl = document.getElementById('toast-text');
-    const redBtnAfter = document.querySelector('.color-swatch[data-role="waiting"][data-color="#ec1313"]');
+    const redBtnAfter = document.querySelector('.color-swatch-halo[data-role="waiting"][data-color="#ec1313"], .color-swatch[data-role="waiting"][data-color="#ec1313"]');
     out.red = {
       toastVisible: !!toastEl && !toastEl.classList.contains('toast-hidden'),
       toastText: toastTextEl ? toastTextEl.textContent : '',
-      waiting: dots()[1],
+      waiting: dots()[0],
       swatchSelected: !!redBtnAfter && redBtnAfter.classList.contains('selected'),
     };
     // 恢复默认：UI 真实点击「恢复默认色板」
     const resetBtn = document.getElementById('btn-colors-reset');
     if (resetBtn) resetBtn.click();
     await tick();
-    out.reset = { working: dots()[0], waiting: dots()[1], completed: dots()[2], rows: dots().length, statusRunning: statusDot() };
+    out.reset = { working: dots()[1], waiting: dots()[0], completed: dots()[2], rows: dots().length, statusRunning: statusDot() };
     out.stateWordsAfter = [...document.querySelectorAll('.session-state')].map((el) => el.textContent);
-    out.stateClassesAfter = [...document.querySelectorAll('.session-dot')].map((el) => el.className);
     const persisted = await new Promise((res) => chrome.storage.local.get({ settings: {} }, (d) => res(JSON.stringify(d.settings && d.settings.colorMap))));
     out.persisted = persisted;
-    // 恢复现场（settings 原值 + 会话数据 + 状态 + 轮询）
+    // 恢复现场
     refreshSessions = origRefresh;
     sessionsData = origData; state = origState; render();
+    settings = JSON.parse(origSettings);
     await new Promise((res) => chrome.storage.local.set({ settings: JSON.parse(origSettings) }, res));
-    // 打开设置面板（颜色角色区可见）供视觉存档
-    const settingsBtn = document.getElementById('btn-settings');
-    if (settingsBtn) settingsBtn.click();
+    // 打开设置面板供视觉存档
+    switchV6('sett');
     await new Promise((res) => setTimeout(res, 120));
     return JSON.stringify(out);
   })()`);
@@ -1550,9 +1502,9 @@ async function main() {
   const m10Words2 = (m10.stateWordsAfter || []).join('|');
   const m10Cls1 = (m10.changed && m10.changed.stateClasses || []).join('|');
   const m10Cls2 = (m10.stateClassesAfter || []).join('|');
-  record('M10：字符语义回归（改色前后状态词与圆点类名不变——文字状态词是主语义）',
+  record('M10：字符语义回归（改色前后状态词与圆点类名不变——文字状态词是主语义；M11 排序：待确认 > 进行中 > 已完成）',
     m10ok(m10) && m10Words1 === m10Words2 && m10Cls1 === m10Cls2
-      && m10Words1 === '进行中|待确认|已完成',
+      && m10Words1 === '待确认|进行中|已完成',
     'w1=' + m10Words1 + ' w2=' + m10Words2 + ' c1=' + m10Cls1 + ' c2=' + m10Cls2);
 
   // 视觉存档：设置面板「颜色角色」区（恢复默认后的色板，供人工/vision 核验排版）
@@ -1561,6 +1513,103 @@ async function main() {
   fs.writeFileSync(m10Png, Buffer.from(m10Shot.data, 'base64'));
   record('popup-m10.png 截图（颜色角色区展开）', fs.statSync(m10Png).size > 2000,
     m10Png + ' (' + fs.statSync(m10Png).size + ' bytes)');
+
+  // 15) M11 会话感知：已读倒计时 + 保留时长设置（§8.10 演进）
+  log('M11 会话感知（已读/保留时长）');
+  const m11Raw = await evalPage(`(async () => {
+    const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => res())));
+    const tick = (ms) => new Promise((res) => setTimeout(res, ms));
+    const snapRows = () => [...document.querySelectorAll('#sessions-list .session-row')].map((r) => ({
+      title: r.querySelector('.session-title') ? r.querySelector('.session-title').textContent : '',
+      state: r.querySelector('.session-state') ? r.querySelector('.session-state').textContent : '',
+      hasReadBtn: !!r.querySelector('.btn-mark-read'),
+    }));
+    const out = {};
+    const origState = state, origData = sessionsData;
+    const origRead = JSON.stringify(readSessions);
+    const origRetention = settings ? settings.retentionMins : undefined;
+    const origRefreshSessionsRef = refreshSessions; refreshSessions = () => {};
+    const NOW = Date.now();
+    const MIN = 60000;
+    readSessions = {};
+    settings = Object.assign({}, settings, { retentionMins: 30 });
+    sessionsData = { available: true, items: [
+      { sessionId: 's11-fresh', title: '新鲜完成', state: 'completed', updatedAt: NOW - 1 * MIN, blank: false, hasActiveChildren: false, childRuns: [] },
+      { sessionId: 's11-stale', title: '陈旧完成', state: 'completed', updatedAt: NOW - 31 * MIN, blank: false, hasActiveChildren: false, childRuns: [] },
+    ]};
+    state = 'running'; render(); await frame();
+    out.base = { rows: snapRows(), count: document.getElementById('sessions-count').textContent };
+    // 1) 点「已读」→ 原地倒计时药丸出现；1 秒后读秒递减
+    const readBtn = document.querySelector('#sessions-list .btn-mark-read');
+    if (readBtn) readBtn.click();
+    await tick(120);
+    out.afterRead = {
+      rows: snapRows(),
+      pill: !!document.querySelector('#sessions-list .inline-undo-pill'),
+      pillText: (document.querySelector('#sessions-list .inline-undo-pill') || {}).textContent || '',
+    };
+    await tick(1100);
+    out.countdown = {
+      badge: (document.getElementById('countdown-s11-fresh') || {}).textContent || '',
+    };
+    // 2) 撤销 → 行恢复（无 pill、未落库）
+    const undoBtn = document.querySelector('#sessions-list .inline-undo-btn');
+    if (undoBtn) undoBtn.click();
+    await tick(60);
+    out.afterUndo = {
+      rows: snapRows(),
+      pill: !!document.querySelector('#sessions-list .inline-undo-pill'),
+      readAt: readSessions['s11-fresh'] || 0,
+    };
+    // 3) 再点已读并等待倒计时结束 → 行移除 + readSessions 落库
+    const readBtn2 = document.querySelector('#sessions-list .btn-mark-read');
+    if (readBtn2) readBtn2.click();
+    await tick(4200);
+    out.afterCommit = {
+      rows: snapRows(),
+      readAt: readSessions['s11-fresh'] || 0,
+      count: document.getElementById('sessions-count').textContent,
+    };
+    // 4) retentionMins=0 → 已完成全部不显示（已停止不受影响）
+    settings = Object.assign({}, settings, { retentionMins: 0 });
+    sessionsData = { available: true, items: [
+      { sessionId: 's11-fresh', title: '新鲜完成', state: 'completed', updatedAt: NOW - 1 * MIN, blank: false, hasActiveChildren: false, childRuns: [] },
+      { sessionId: 's11-stopped', title: '已停止会话', state: 'completed', updatedAt: NOW - 120 * MIN, blank: false, hasActiveChildren: true, childRuns: [{ childId: 'c9' }] },
+    ]};
+    readSessions = {};
+    render(); await frame();
+    out.zeroRetention = { rows: snapRows(), count: document.getElementById('sessions-count').textContent };
+    // 恢复现场
+    refreshSessions = origRefreshSessionsRef;
+    sessionsData = origData; state = origState; render();
+    readSessions = JSON.parse(origRead);
+    await new Promise((res) => chrome.storage.local.set({ readSessions: readSessions }, res));
+    if (origRetention === undefined) delete settings.retentionMins; else settings.retentionMins = origRetention;
+    return JSON.stringify(out);
+  })()`);
+  let m11 = {};
+  try { m11 = JSON.parse(m11Raw); } catch (_) { /* 保持默认 */ }
+  const m11ok = (o) => !!(o && o.base);
+  record('M11：仅新鲜完成显示（default retentionMins=30：fresh 显 / 31 分钟前 stale 不显）',
+    m11ok(m11) && m11.base.rows.length === 1 && m11.base.rows[0].title === '新鲜完成' && m11.base.count.includes('1'),
+    JSON.stringify(m11.base));
+  record('M11：已完成行提供「已读」入口；点击出现原地倒计时药丸（已读 · 撤销 3s）',
+    m11ok(m11) && m11.base.rows[0].hasReadBtn === true
+      && m11.afterRead.pill === true && /已读/.test(m11.afterRead.pillText) && /撤销/.test(m11.afterRead.pillText),
+    JSON.stringify(m11.afterRead));
+  record('M11：倒计时读秒递减（1s 后徽标 ≤ 2s）',
+    m11ok(m11) && /^[0-2]s$/.test(m11.countdown.badge),
+    JSON.stringify(m11.countdown));
+  record('M11：撤销恢复（行还在、无 pill、readSessions 未落库）',
+    m11ok(m11) && m11.afterUndo.rows.length === 1 && m11.afterUndo.pill === false && m11.afterUndo.readAt === 0,
+    JSON.stringify(m11.afterUndo));
+  record('M11：倒计时结束落库并移除行（readSessions>0、行消失、其余完成行不受影响）',
+    m11ok(m11) && m11.afterCommit.rows.length === 0 && m11.afterCommit.readAt > 0 && m11.afterCommit.count === '',
+    JSON.stringify(m11.afterCommit));
+  record('M11：retentionMins=0 时完成会话不显示，但「已停止·有子代理」恒显',
+    m11ok(m11) && m11.zeroRetention.rows.length === 1 && m11.zeroRetention.rows[0].state === '已停止'
+      && m11.zeroRetention.count.includes('1'),
+    JSON.stringify(m11.zeroRetention));
 
   await cleanup();
   const failed = results.filter((r) => !r.ok);

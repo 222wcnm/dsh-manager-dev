@@ -34,6 +34,9 @@ const ERROR_TEXTS = {
 const DEFAULT_SETTINGS = {
   port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, theme: 'follow-webui',
   attention: true, attentionDone: true,
+  // M11 会话感知(design §8.10 演进):完成会话保留时长(分钟)——刚完成的会话在此
+  // 时间窗内显示,过期/已读后从列表消失;5~1440,0 = 从不显示已完成。
+  retentionMins: 30,
   // M10 颜色语义（design §8.12）：五角色预设色板（提案值，体验后定稿）；error 红与
   // 字符语义锁定；与 background.js DEFAULT_SETTINGS 保持一致（防 onInstalled 合并丢弃）
   colorMap: DSHColors.DEFAULT_COLOR_MAP,
@@ -69,15 +72,74 @@ let lastDriftKey = null; // 上次状态漂移提示的键（相同漂移去重�
 // sessionsData===null 表示尚未拿到数据或请求失败（会话区隐藏）。
 let sessionsData = null;
 
-// 会话状态展示层（§8.10 色表 M10.1 定稿，扩展 §8.9.1）：
-// 蓝=进行中 / 黄=待确认（webui 计划面板同色系）/ 绿=完成；文字状态词恒有（防颜色混淆硬规则）。
-// idle 不再展示（§8.10 idle 注记：live 集合近零出现 + webui 本体不区分）——渲染层过滤；
-// 未知 state 回退 completed 降级渲染（不显示 idle 行）。
-const SESSION_STATE_META = {
-  working: { cls: 'sdot-working', label: '进行中' },
-  waiting: { cls: 'sdot-waiting', label: '待确认' },
-  completed: { cls: 'sdot-completed', label: '已完成' },
-};
+// M11 已读机制（本地展示层，不触碰 dsh 数据）：readSessions { [sessionId]: readAt }。
+// 已读只作用于「已完成会话」：readAt 晚于完成时刻 → 隐藏；会话重新活跃（working/
+// waiting）自动重现；再次完成后完成时刻更新 → 重新出现，需再次已读。
+const READ_STORE_KEY = 'readSessions';
+let readSessions = {};
+// 已读倒计时（原地微药丸「已读 · 撤销 3s」，点已读后 REMAIN 秒内可撤销）：
+let pendingReadMap = {}; // { [sessionId]: { remaining, intervalId } }
+const READ_COUNTDOWN_SECONDS = 3;
+let readTimers = []; // 全部倒计时 setInterval 句柄（unload 统一清理）
+
+// 防抖：会话区渲染签名。status 轮询(2s) + refreshSessions 返回都会重入 applySessions；
+// 签名未变时直接短路（全量重建会让 hover 态丢失/点阵动画跳相，表现为闪烁抽动）。
+let lastSessionSig = null;
+
+function sessionRenderSig() {
+  const dshOff = state === 'stopped' || state === 'error' || state === 'unknown';
+  const items = (sessionsData && Array.isArray(sessionsData.items)) ? sessionsData.items : [];
+  return JSON.stringify({
+    avail: !!(sessionsData && sessionsData.available === true),
+    off: dshOff,
+    r: settings ? settings.retentionMins : DEFAULT_SETTINGS.retentionMins,
+    rd: readSessions,
+    pd: Object.keys(pendingReadMap),
+    items: items.map((it) => [
+      it.sessionId, it.state, it.updatedAt, it.title || '',
+      it.hasActiveChildren, JSON.stringify(it.childRuns || []),
+    ]),
+  });
+}
+
+// 已完成会话的「新鲜」判定：完成时刻距今 ≤ retentionMins（0 = 永不显示已完成）。
+function isFreshCompleted(item, now) {
+  const mins = settings && Number.isFinite(Number(settings.retentionMins))
+    ? Number(settings.retentionMins)
+    : DEFAULT_SETTINGS.retentionMins;
+  if (!(mins > 0)) return false;
+  const ageMs = now - (item.updatedAt || now);
+  return ageMs >= 0 && ageMs <= mins * 60000;
+}
+
+function readAtOf(id) {
+  const v = readSessions[id];
+  return typeof v === 'number' ? v : 0;
+}
+
+function saveReadSessions() {
+  // 防膨胀兜底：超过上限时按最旧已读时间裁剪（纯展示层记录，过期只影响「已完成」是否隐藏）
+  const MAX_READ = 500;
+  const keys = Object.keys(readSessions);
+  if (keys.length > MAX_READ) {
+    keys.sort((a, b) => (readSessions[a] || 0) - (readSessions[b] || 0));
+    for (const k of keys.slice(0, keys.length - MAX_READ)) delete readSessions[k];
+  }
+  chrome.storage.local.set({ [READ_STORE_KEY]: readSessions });
+}
+
+function escapeHtml(str) {
+  if (str === undefined || str === null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// M11 会话感知（design §8.10 演进）：四态 —— waiting > working/已停止(有子代理) >
+// 已完成(新鲜且未已读)；idle 不渲染；语义色沿用 M10.1 定稿（蓝=进行中/黄=待确认/
+// 绿=完成,已停止与已完成同族以文字区分）。
 
 // 呼吸同步（2026-08-23 用户反馈：呼吸效果整个 popup 同步）：
 // 以 popup 打开时刻为全局时钟零点，每个呼吸点（状态卡 running/external + 会话四态）
@@ -96,11 +158,15 @@ function alignBreathe(el) {
 // 初始化
 // ---------------------------------------------------------------------------
 
+let activeTab = 'dash'; // 'dash' | 'sess' | 'sett'
+
 async function init() {
   DSHTheme.init(); // M6：尽早应用主题（避免浅色闪烁），并订阅 storage/webuiTheme + matchMedia
   DSHColors.init(); // M10：尽早应用颜色语义变量（settings.colorMap → --dsh-mgr-sem-*）
+  if (typeof injectDSHAssets === 'function') injectDSHAssets(); // 注入官方原生 SVG 资产
   bindEvents();
   await loadSettings();
+  await loadReadSessions(); // M11：已读记录（本地展示层）
   renderSettingsForm();
   await refreshStatus();
   refreshSessions(); // M9：会话摘要（只读，失败静默降级）
@@ -112,10 +178,20 @@ async function init() {
 }
 
 function bindEvents() {
-  $('btn-settings').addEventListener('click', () => toggleSettings());
-  $('btn-refresh').addEventListener('click', manualRefresh);
+  // V6 导轨导航按钮
+  $('v6-r-dash').addEventListener('click', () => switchV6('dash'));
+  $('v6-r-sess').addEventListener('click', () => switchV6('sess'));
+  $('v6-r-sett').addEventListener('click', () => switchV6('sett'));
+  $('btn-sess-open').addEventListener('click', openWebUI);
+
+  // 兼容旧按钮 ID 契约
+  const btnSett = $('btn-settings');
+  if (btnSett) btnSett.addEventListener('click', () => switchV6(activeTab === 'sett' ? 'dash' : 'sett'));
+  const btnRef = $('btn-refresh');
+  if (btnRef) btnRef.addEventListener('click', manualRefresh);
+
   $('btn-save').addEventListener('click', saveSettings);
-  $('btn-cancel').addEventListener('click', () => toggleSettings(false));
+  $('btn-cancel').addEventListener('click', () => switchV6('dash'));
   $('btn-start').addEventListener('click', () => doAction('start'));
   $('btn-stop').addEventListener('click', () => doAction('stop'));
   $('btn-restart').addEventListener('click', () => doAction('restart'));
@@ -123,37 +199,62 @@ function bindEvents() {
   $('btn-open').addEventListener('click', openWebUI);
   $('btn-copy-log').addEventListener('click', copyLog);
   $('btn-logs').addEventListener('click', openLogs);
+
   // 输入时清除无效反馈
   $('set-port').addEventListener('input', () => clearFieldInvalid('set-port'));
   $('set-badge').addEventListener('input', () => clearFieldInvalid('set-badge'));
+  $('set-retention').addEventListener('input', () => clearFieldInvalid('set-retention')); // M11
+
   // 外观行（M6）：点选即生效（写入 settings.theme + 即时应用，不弹 toast、不触发 saveSettings）
   document.querySelectorAll('.theme-cube').forEach((btn) => {
     btn.addEventListener('click', () => onThemeSelect(btn.getAttribute('data-theme')));
   });
   // radiogroup 键盘导航（roving tabindex + 方向键/Home/End）
-  $('theme-grid').addEventListener('keydown', onThemeGridKeydown);
-  // M10 颜色语义（design §8.12）：预设色板点选即生效（同 theme-cube 交互）；
-  // 每角色一行 radiogroup（swatch 按钮渲染于 renderColorGrid），恢复默认按钮重置全色板
-  $('colors-grid').addEventListener('click', (e) => {
-    const btn = e.target.closest('.color-swatch');
-    if (!btn) return;
-    onColorSelect(btn.getAttribute('data-role'), btn.getAttribute('data-color'));
-  });
-  $('colors-grid').addEventListener('keydown', onColorGridKeydown);
-  $('btn-colors-reset').addEventListener('click', onColorReset);
-  // M9 会话区：折叠头（可折叠、默认展开）。会话行为**纯展示**（2026-08-23 修复误导：
-  // Web UI 无 URL 会话深链，行点击只能打开实例首页且恢复"上次选中会话"——点某行却进
-  // 另一会话，构成误导；导航交互收回给明确语义的「打开 Web UI」按钮；深链见 §8.10 规划）。
-  $('sessions-toggle').addEventListener('click', () => {
-    const section = $('sessions-section');
-    const collapsed = section.classList.toggle('collapsed');
-    const btn = $('sessions-toggle');
-    if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  });
+  const tgrid = $('theme-grid');
+  if (tgrid) tgrid.addEventListener('keydown', onThemeGridKeydown);
+
+  // M10 颜色语义（design §8.12）：预设色盘点选即生效
+  const cgrid = $('colors-grid');
+  if (cgrid) {
+    cgrid.addEventListener('click', (e) => {
+      const btn = e.target.closest('.color-swatch-halo, .color-swatch');
+      if (!btn) return;
+      onColorSelect(btn.getAttribute('data-role'), btn.getAttribute('data-color'));
+    });
+    cgrid.addEventListener('keydown', onColorGridKeydown);
+  }
+  const btnCReset = $('btn-colors-reset');
+  if (btnCReset) btnCReset.addEventListener('click', onColorReset);
+
   window.addEventListener('unload', () => {
     if (pollTimer) clearInterval(pollTimer);
     if (tickTimer) clearInterval(tickTimer);
+    for (const t of readTimers) clearInterval(t);
+    readTimers = [];
   });
+}
+
+// V6 导轨面板切换 (带平滑进场动效)
+function switchV6(tab) {
+  activeTab = tab;
+  ['dash', 'sess', 'sett'].forEach((t) => {
+    const r = $('v6-r-' + t);
+    const p = $('v6-p-' + t);
+    if (r) r.classList.toggle('active', t === tab);
+    if (p) {
+      p.classList.toggle('hidden', t !== tab);
+      if (t === tab) {
+        p.classList.remove('panel-slide-in');
+        void p.offsetWidth; // 触发重绘以平滑进场
+        p.classList.add('panel-slide-in');
+      }
+    }
+  });
+  if (tab === 'sett') {
+    renderSettingsForm();
+    const serr = $('settings-error');
+    if (serr) serr.classList.add('hidden');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -330,27 +431,34 @@ async function refreshSessions() {
   applySessions();
 }
 
-// 会话区渲染：折叠头计数 + 列表 / 空态 / 降级提示（§8.10）
+// 会话区渲染：折叠头计数 + 列表 / 空态 / 降级提示（§8.10 与 V6 导轨联动）。
+// M11：四态感知 —— waiting > working/已停止(有子代理) > 已完成(新鲜且未已读)；
+// idle 不渲染；已完成行 hover 出现「已读」；子代理行作为父行嵌套树行（进行中）。
+// M11.1 防抖：数据/显示输入未变化时短路，避免 2s 轮询全量重建（hover 丢失→闪烁）。
 function applySessions() {
+  const sig = sessionRenderSig();
+  if (sig === lastSessionSig) return;
+  lastSessionSig = sig;
   const section = $('sessions-section');
   if (!section) return;
   const list = $('sessions-list');
   const empty = $('sessions-empty');
   const hint = $('sessions-hint');
   const count = $('sessions-count');
+  const railBadge = $('v6-sess-badge');
 
-  // 未加载 / 失败 / dsh 未运行 -> 整个会话区隐藏（不报错）；
-  // 顺手清空计数与列表残留，避免恢复显示前闪现陈旧行
+  // 未加载 / 失败 / dsh 未运行 -> 整个会话区隐藏（不报错）
   if (!sessionsData) {
     section.classList.add('hidden');
     if (count) count.textContent = '';
+    if (railBadge) railBadge.classList.add('hidden');
     return;
   }
   const dshOff = state === 'stopped' || state === 'error' || state === 'unknown';
   if (!sessionsData.available) {
-    // 插件未装/未升级：dsh 在运行时给中性提示，未运行时隐藏
     if (dshOff) {
       section.classList.add('hidden');
+      if (railBadge) railBadge.classList.add('hidden');
     } else {
       section.classList.remove('hidden');
       list.classList.add('hidden');
@@ -358,6 +466,7 @@ function applySessions() {
       hint.classList.remove('hidden');
       hint.textContent = '安装/升级 dsh 配套插件后可查看会话';
       count.textContent = '';
+      if (railBadge) railBadge.classList.add('hidden');
     }
     return;
   }
@@ -365,15 +474,48 @@ function applySessions() {
   const items = sessionsData.items;
   section.classList.remove('hidden');
   hint.classList.add('hidden');
-  // M10.1（2026-08-24 定稿）：遵循 Web UI 区分，只呈现三态——idle 不渲染
-  // （§8.10 idle 注记：live 集合近零出现 + webui 本体不区分；未知态回退 completed 降级渲染）
-  const shown = items.filter((it) => it.state !== 'idle');
-  count.textContent = shown.length > 0 ? String(shown.length) : '';
+
+  const now = Date.now();
+  // 过滤：idle 不渲染；waiting/working 恒显；completed ---
+  //   有子代理在跑 → 恒显（感知优先，不受时长/已读约束）；
+  //   无子代理 → 新鲜（≤retentionMins）且 未已读（updatedAt > readAt）才显。
+  const shown = items.filter((it) => {
+    if (it.state === 'idle') return false;
+    if (it.state === 'waiting' || it.state === 'working') return true;
+    if (it.state === 'completed') {
+      if (it.hasActiveChildren) return true;
+      if (it.updatedAt && it.updatedAt <= readAtOf(it.sessionId)) return false;
+      return isFreshCompleted(it, now);
+    }
+    return false;
+  });
+
+  // 排序：待确认 > 进行中/已停止(有子代理) > 已完成；组内 updatedAt 降序
+  const prio = (it) => {
+    if (it.state === 'waiting') return 1;
+    if (it.state === 'working' || (it.state === 'completed' && it.hasActiveChildren)) return 2;
+    if (it.state === 'completed') return 3;
+    return 4;
+  };
+  shown.sort((a, b) => {
+    const pA = prio(a);
+    const pB = prio(b);
+    if (pA !== pB) return pA - pB;
+    return (b.updatedAt || 0) - (a.updatedAt || 0);
+  });
+
+  count.textContent = shown.length > 0 ? shown.length + ' 活跃' : '';
+
+  // 导轨会话红点感知：有待确认或进行中（含已停止·子代理）会话时在导轨亮小黄点
+  const hasPending = shown.some((it) => it.state === 'waiting' || it.state === 'working'
+    || (it.state === 'completed' && it.hasActiveChildren));
+  if (railBadge) railBadge.classList.toggle('hidden', !hasPending);
 
   if (shown.length === 0) {
+    list.textContent = ''; // 清残留行（隐藏列表不留陈旧节点：已读移除/过期为空的语义完整）
     list.classList.add('hidden');
     empty.classList.remove('hidden');
-    empty.textContent = '暂无会话';
+    empty.textContent = '暂无活跃会话';
     return;
   }
 
@@ -381,28 +523,202 @@ function applySessions() {
   list.classList.remove('hidden');
   list.textContent = '';
   for (const item of shown) {
-    const meta = SESSION_STATE_META[item.state] || SESSION_STATE_META.completed;
-    const title = (typeof item.title === 'string' && item.title)
-      ? item.title
-      : '会话 #' + String(item.sessionId || '').slice(0, 8);
-    const row = document.createElement('div');
-    row.className = 'session-row';
-    // 纯展示：无 role/tabindex/点击语义（见 bindEvents 注记；深链规划于 §8.10）
-    const dot = document.createElement('span');
-    dot.className = 'session-dot ' + meta.cls;
-    dot.setAttribute('aria-hidden', 'true');
-    alignBreathe(dot); // 全 popup 呼吸点同步（折算回 popup 打开时刻）
-    const titleEl = document.createElement('span');
-    titleEl.className = 'session-title';
-    titleEl.textContent = title;
-    const stateEl = document.createElement('span');
-    stateEl.className = 'session-state';
-    stateEl.textContent = meta.label; // 文字状态词恒有（防颜色混淆硬规则）
-    row.appendChild(dot);
-    row.appendChild(titleEl);
-    row.appendChild(stateEl);
-    list.appendChild(row);
+    list.appendChild(renderSessionUnit(item));
   }
+}
+
+// 状态圆点：M11 已停止沿用 completed 绿（主会话已停，与已完成同族、以文字区分）
+function sessionDotCls(state) {
+  if (state === 'waiting') return 'session-dot sdot-waiting breathe';
+  if (state === 'working') return 'session-dot sdot-working breathe';
+  return 'session-dot sdot-completed breathe';
+}
+
+// 单行渲染（含子代理树行与已读交互），返回 DOM 节点
+function renderSessionUnit(item) {
+  const unit = document.createElement('div');
+  const isPendingUndo = !!pendingReadMap[item.sessionId];
+  unit.className = 'session-unit' + (isPendingUndo ? ' is-pending-undo' : '');
+  unit.id = 'unit-' + item.sessionId;
+
+  const isCompletedNoChild = item.state === 'completed' && !item.hasActiveChildren;
+
+  const row = document.createElement('div');
+  row.className = 'session-row' + (isCompletedNoChild && !isPendingUndo ? ' can-read' : '');
+  row.title = item.title || '';
+
+  const leftWrap = document.createElement('div');
+  leftWrap.style.cssText = 'display:flex;align-items:center;gap:6px;min-width:0;flex:1';
+
+  let dot;
+  if (item.state === 'working' && typeof renderStateMatrix === 'function') {
+    dot = document.createElement('span');
+    dot.innerHTML = renderStateMatrix(10, null, performance.now()); // 绝对时间相位：重建不跳相
+  } else {
+    dot = document.createElement('span');
+    dot.className = sessionDotCls(item.state);
+    dot.setAttribute('aria-hidden', 'true');
+    alignBreathe(dot);
+  }
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'session-title';
+  titleEl.textContent = (typeof item.title === 'string' && item.title)
+    ? item.title
+    : '会话 #' + String(item.sessionId || '').slice(0, 8);
+
+  leftWrap.appendChild(dot);
+  leftWrap.appendChild(titleEl);
+
+  const rightWrap = document.createElement('div');
+  rightWrap.style.cssText = 'display:flex;align-items:center;gap:4px';
+
+  if (isPendingUndo) {
+    // 原地倒计时等待态
+    rightWrap.appendChild(buildInlineUndoPill(item.sessionId, pendingReadMap[item.sessionId].remaining));
+  } else {
+    const stateEl = document.createElement('span');
+    stateEl.className = 'session-state' + (item.state === 'working' ? ' shimmer-text' : '');
+    if (item.state === 'waiting') stateEl.style.color = 'var(--dsh-mgr-sem-waiting)';
+    if (item.state === 'completed') {
+      stateEl.textContent = item.hasActiveChildren ? '已停止' : '已完成';
+      stateEl.style.color = 'var(--dsh-mgr-sem-completed)';
+    } else if (item.state === 'waiting') {
+      stateEl.textContent = '待确认';
+    } else {
+      stateEl.textContent = '进行中';
+    }
+    rightWrap.appendChild(stateEl);
+
+    if (isCompletedNoChild) {
+      rightWrap.appendChild(buildMarkReadBtn(item.sessionId, item.title));
+    }
+  }
+
+  row.appendChild(leftWrap);
+  row.appendChild(rightWrap);
+  unit.appendChild(row);
+
+  // 子代理树行（挂在父行下方：缩进连接线 + 蓝点 + label + 进行中）
+  if (item.hasActiveChildren && Array.isArray(item.childRuns) && item.childRuns.length > 0) {
+    const branch = document.createElement('div');
+    branch.className = 'subagent-branch-wrap';
+    for (const child of item.childRuns) {
+      const leaf = document.createElement('div');
+      leaf.className = 'subagent-leaf-row';
+      const content = document.createElement('div');
+      content.className = 'subagent-leaf-content';
+      let cdot;
+      if (typeof renderStateMatrix === 'function') {
+        cdot = document.createElement('span');
+        cdot.innerHTML = renderStateMatrix(8, null, performance.now()); // 绝对时间相位：重建不跳相
+      } else {
+        cdot = document.createElement('span');
+        cdot.className = 'session-dot sdot-working breathe';
+        alignBreathe(cdot);
+      }
+      const ctitle = document.createElement('span');
+      ctitle.className = 'subagent-title';
+      ctitle.title = (typeof child.label === 'string' && child.label) ? child.label : '子代理';
+      ctitle.textContent = ctitle.title;
+      const cstate = document.createElement('span');
+      cstate.className = 'subagent-state shimmer-text';
+      cstate.textContent = '进行中';
+      content.appendChild(cdot);
+      content.appendChild(ctitle);
+      content.appendChild(cstate);
+      leaf.appendChild(content);
+      branch.appendChild(leaf);
+    }
+    unit.appendChild(branch);
+  }
+
+  return unit;
+}
+
+// 「已读」按钮（中性幽灵微胶囊；hover 行时替换状态词）
+function buildMarkReadBtn(sessionId, title) {
+  const btn = document.createElement('button');
+  btn.className = 'btn-mark-read';
+  btn.type = 'button';
+  btn.title = '标记已读';
+  btn.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3.5 8.5 6.5 11.5 12.5 4.5"/></svg><span>已读</span>';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    startInlineCountdown(sessionId, title);
+  });
+  return btn;
+}
+
+// 原地倒计时微药丸（已读 · 撤销 Ns）
+function buildInlineUndoPill(sessionId, remaining) {
+  const pill = document.createElement('div');
+  pill.className = 'inline-undo-pill';
+  const label = document.createElement('span');
+  label.textContent = '已读';
+  const undoBtn = document.createElement('button');
+  undoBtn.className = 'inline-undo-btn';
+  undoBtn.type = 'button';
+  undoBtn.title = '点击恢复会话';
+  const undoText = document.createElement('span');
+  undoText.textContent = '撤销';
+  const badge = document.createElement('span');
+  badge.className = 'countdown-badge';
+  badge.id = 'countdown-' + sessionId;
+  badge.textContent = remaining + 's';
+  undoBtn.appendChild(undoText);
+  undoBtn.appendChild(badge);
+  undoBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cancelInlineUndo(sessionId);
+  });
+  pill.appendChild(label);
+  pill.appendChild(undoBtn);
+  return pill;
+}
+
+// 点击「已读」→ 原地倒计时；倒计时结束落库并移除行；期间可撤销
+function startInlineCountdown(sessionId, title) {
+  if (pendingReadMap[sessionId]) return;
+  pendingReadMap[sessionId] = { remaining: READ_COUNTDOWN_SECONDS, intervalId: null, title };
+  renderSessionsNow();
+
+  const intervalId = setInterval(() => {
+    const entry = pendingReadMap[sessionId];
+    if (!entry) { clearInterval(intervalId); return; }
+    entry.remaining -= 1;
+    if (entry.remaining <= 0) {
+      clearInterval(intervalId);
+      const el = document.getElementById('unit-' + sessionId);
+      if (el) el.classList.add('removing');
+      setTimeout(() => {
+        readSessions[sessionId] = Date.now();
+        delete pendingReadMap[sessionId];
+        saveReadSessions();
+        renderSessionsNow();
+      }, 180);
+    } else {
+      const badge = document.getElementById('countdown-' + sessionId);
+      if (badge) badge.textContent = entry.remaining + 's';
+      else renderSessionsNow();
+    }
+  }, 1000);
+  pendingReadMap[sessionId].intervalId = intervalId;
+  readTimers.push(intervalId);
+}
+
+// 撤销：取消倒计时，行恢复原样
+function cancelInlineUndo(sessionId) {
+  const entry = pendingReadMap[sessionId];
+  if (!entry) return;
+  if (entry.intervalId) clearInterval(entry.intervalId);
+  delete pendingReadMap[sessionId];
+  readTimers = readTimers.filter((t) => t !== entry.intervalId);
+  renderSessionsNow();
+}
+
+function renderSessionsNow() {
+  applySessions();
 }
 
 // ---------------------------------------------------------------------------
@@ -515,14 +831,17 @@ function render() {
   const isError = state === 'error';
   const locked = !!pending; // 操作在途：所有生命周期按钮锁定，防止并发
 
-  // 状态圆点（dotStateClass 集中映射语义 class：running/z/error/stopped + busy 走 Matrix）
-  // className 变更才重设 + alignBreathe：每 2s 轮询 render 不改 delay（className 相同
-  // 时 animation 不重启；改 delay 反而会触发动画重算导致跳变）
+  // 状态圆点（dotStateClass 集中映射语义 class：running/external/error/stopped + busy 走 Matrix）
   const dotEl = $('dot');
+  const railDotEl = $('rail-dot');
   const dotCls = 'dot ' + dotStateClass();
-  if (dotEl.className !== dotCls) {
+  if (dotEl && dotEl.className !== dotCls) {
     dotEl.className = dotCls;
     if (/dot-(running|external)/.test(dotCls)) alignBreathe(dotEl); // 呼吸全 popup 同步
+  }
+  if (railDotEl && railDotEl.className !== dotCls + ' breathe') {
+    railDotEl.className = dotCls + ' breathe';
+    if (/dot-(running|external)/.test(dotCls)) alignBreathe(railDotEl);
   }
 
   // 按钮随状态启用/禁用：external 可接管 + 打开 Web UI（design §6.6/§6.7）
@@ -600,12 +919,11 @@ function row2Text() {
     const health = detail && detail.health;
     const parts = [];
     if (health) {
-      parts.push('健康');
       if (health.uptimeMs) parts.push('已运行 ' + formatCompactUptime(health.uptimeMs));
     }
     if (detail && detail.pid) parts.push('PID ' + detail.pid);
     if (health && health.nodeVersion) parts.push('node ' + health.nodeVersion);
-    return parts.join(' · ');
+    return parts.join(' · ') || '已就绪';
   }
   if (state === 'external') {
     let t = '外部启动，接管后由扩展管理' + (detail && detail.pid ? ' · PID ' + detail.pid : '');
@@ -627,7 +945,7 @@ function row2Text() {
   return '正在获取状态…';
 }
 
-// 状态卡渲染（M7）：卡片 class + 状态词 + 端口 + 次级信息行
+// 状态卡渲染（V6）：卡片 class + 状态词 + 端口 + 次级信息行 + 健康度标签
 function renderStatusCard() {
   const card = $('statuscard');
   if (!card) return;
@@ -638,13 +956,25 @@ function renderStatusCard() {
   const sw = $('state-word');
   if (sw) sw.textContent = stateWordText();
 
+  const healthEl = $('health-tag');
+  if (healthEl) {
+    if (state === 'running') {
+      healthEl.textContent = '健康';
+      healthEl.style.display = '';
+      healthEl.style.color = 'var(--dsw-alias-state-success-primary)';
+    } else if (state === 'error') {
+      healthEl.textContent = '异常';
+      healthEl.style.display = '';
+      healthEl.style.color = 'var(--dsw-alias-state-error-primary)';
+    } else {
+      healthEl.style.display = 'none';
+    }
+  }
+
   const portEl = $('port-text');
-  if (!portEl) return;
-  if (state === 'running' || state === 'external') {
+  if (portEl) {
     const port = resolvePort();
-    portEl.textContent = port ? '端口 ' + port : '';
-  } else {
-    portEl.textContent = '';
+    portEl.textContent = port ? String(port) : '3080';
   }
 
   const row2 = $('row2-text');
@@ -675,7 +1005,7 @@ function renderHint() {
   }
   const lifecycle = !!detail.lifecycle;
   hint.textContent = lifecycle
-    ? '优雅停机已启用（dsh-lifecycle）'
+    ? '优雅停机已就绪'
     : '安装 dsh-lifecycle 插件可优雅停机';
 }
 
@@ -683,6 +1013,7 @@ function renderHint() {
 // → spinner + 「…中」文案，视觉与状态对齐；否则按状态显示 idle 文案
 function setBtnLabel(id, action) {
   const btn = $(id);
+  if (!btn) return;
   const label = btn.querySelector('.btn-label');
   const mine = pending && pending.action === action;
   // 无 pending 的忙碌态（他处发起 / 宿主回填前 starting）：按钮也转圈，与圆点脉冲一致
@@ -691,11 +1022,11 @@ function setBtnLabel(id, action) {
     (state === 'stopping' && (action === 'stop' || action === 'restart'))
   );
   if (mine || stateBusy) {
-    label.textContent = ACTION_LABELS[action].busy;
+    if (label) label.textContent = ACTION_LABELS[action].busy;
     btn.classList.add('is-pending');
   } else {
     btn.classList.remove('is-pending');
-    label.textContent = ACTION_LABELS[action].idle;
+    if (label) label.textContent = ACTION_LABELS[action].idle;
   }
 }
 
@@ -718,6 +1049,7 @@ function renderProgress() {
 
 function renderUptime() {
   const el = $('uptime-text');
+  if (!el) return;
   if (state !== 'running' || !startedAtMs) {
     el.textContent = '';
     return;
@@ -811,6 +1143,17 @@ function loadSettings() {
   });
 }
 
+// M11 已读记录加载（本地存储；损坏/缺失时静默置空——已读是纯展示层，不阻断）
+function loadReadSessions() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [READ_STORE_KEY]: {} }, (data) => {
+      const raw = data && data[READ_STORE_KEY];
+      readSessions = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+      resolve();
+    });
+  });
+}
+
 function renderSettingsForm() {
   $('set-port').value = settings.port;
   $('set-profile').value = settings.profile;
@@ -818,6 +1161,7 @@ function renderSettingsForm() {
   $('set-badge').value = settings.badgeInterval;
   $('set-attention').checked = settings.attention !== false; // 缺省视为开（向后兼容）
   $('set-attention-done').checked = settings.attentionDone !== false; // M8.1：完成提醒独立开关（缺省开）
+  $('set-retention').value = settings.retentionMins; // M11：完成会话保留时长
   renderThemeGrid();
   renderColorGrid(settings.colorMap);
 }
@@ -866,18 +1210,25 @@ function onThemeGridKeydown(e) {
 }
 
 // ---------------------------------------------------------------------------
-// M10 颜色语义自定义（design §8.12）
+// M10 颜色语义自定义（design §8.12 - 单层柔光色盘升级）
 // ---------------------------------------------------------------------------
 
 // 角色展示名（与徽标/会话区状态词一致；字符语义锁定；M10.1 定稿三角色）
 const COLOR_ROLE_LABELS = {
   waiting: '待确认',
   working: '进行中',
-  completed: '完成',
+  completed: '已完成',
 };
 
-// 每角色一行：语义标签 + 当前色点 + 6 个预设圆形 swatch（radiogroup）。
-// swatch 色值来自 DSHColors.PALETTE 白名单（浅/深主题均可见，无任意输入）。
+// 预览徽标字符 = 真实扩展徽标字符（M10.1 定稿，§8.9/§8.12）：
+// 等待「?」/ 进行中 n（动态计数示意）/ 完成「!」——设置卡预览与实际徽标所见一致
+const COLOR_ROLE_ICONS = {
+  waiting: '?',
+  working: 'n',
+  completed: '!',
+};
+
+// 每角色一行：语义微徽标 + 标签 + 6 个单层柔光色盘 swatch（radiogroup）。
 function renderColorGrid(map) {
   const grid = $('colors-grid');
   if (!grid) return;
@@ -886,24 +1237,24 @@ function renderColorGrid(map) {
   DSHColors.ROLES.forEach((role) => {
     const cur = cm[role];
     html += '<div class="color-row" role="radiogroup" aria-label="' + COLOR_ROLE_LABELS[role] + '">'
-      + '<span class="color-role-label">' + COLOR_ROLE_LABELS[role] + '</span>'
-      + '<span class="color-chip" style="--chip-color:' + cur + '" aria-hidden="true"></span>'
-      + '<div class="color-swatches">'
+      + '<div class="color-label-wrap">'
+      + '<span class="color-badge-preview" id="prev-badge-' + role + '" style="--badge-bg:' + cur + '">' + COLOR_ROLE_ICONS[role] + '</span>'
+      + '<span>' + COLOR_ROLE_LABELS[role] + '</span>'
+      + '</div>'
+      + '<div class="color-swatches" data-role="' + role + '">'
       + DSHColors.PALETTE.map((p) =>
-        '<button type="button" class="color-swatch' + (p.color === cur ? ' selected' : '') + '"'
+        '<button type="button" class="color-swatch-halo' + (p.color === cur ? ' selected' : '') + '"'
         + ' data-role="' + role + '" data-color="' + p.color + '"'
         + ' role="radio" aria-checked="' + (p.color === cur ? 'true' : 'false') + '"'
         + ' aria-label="' + p.name + '" title="' + p.name + '"'
-        + ' style="--swatch-color:' + p.color + '"></button>'
+        + ' style="--sw:' + p.color + ';--swatch-color:' + p.color + '"></button>'
       ).join('')
       + '</div></div>';
   });
   grid.innerHTML = html;
 }
 
-// 点选即生效（同 theme-cube）：白名单校验（normalizeColorMap）→ 更新内存 settings →
-// 写 storage（保留其它字段）→ DSHColors.applyVars 即时应用；改红撞色提示（不硬拦——
-// 字符/状态词仍是主语义）。
+// 点选即生效：白名单校验 → 更新内存 settings → 写 storage → DSHColors.applyVars 即时应用
 function onColorSelect(role, color) {
   if (DSHColors.ROLES.indexOf(role) === -1) return;
   const cm = DSHColors.normalizeColorMap(settings && settings.colorMap);
@@ -911,17 +1262,18 @@ function onColorSelect(role, color) {
   settings = Object.assign({}, settings, { colorMap: cm });
   chrome.storage.local.set({ settings: settings || Object.assign({}, DEFAULT_SETTINGS, { colorMap: cm }) }, () => {
     renderColorGrid(settings.colorMap);
-    DSHColors.applyVars(cm); // 立即生效（storage.onChanged 亦会触发，幂等）
-    // 撞色保护：waiting/completed 改红系 → 与错误语义撞色提示（§8.12：允许，不硬拦；
-    // M10.1 done 已并入 completed，撞色判定随三角色）
-    if (DSHColors.isReddish(color) &&
-        (role === 'waiting' || role === 'completed')) {
+    DSHColors.applyVars(cm); // 立即生效
+    const prev = $('prev-badge-' + role);
+    if (prev) prev.style.setProperty('--badge-bg', color);
+
+    // 撞色保护
+    if (DSHColors.isReddish(color) && (role === 'waiting' || role === 'completed')) {
       showToast('与错误语义撞色（建议保留互斥色）', 'warn');
     }
   });
 }
 
-// 恢复默认色板：整表回退 DSHColors.DEFAULT_COLOR_MAP（提案值），即时生效
+// 恢复默认色板
 function onColorReset() {
   const cm = Object.assign({}, DSHColors.DEFAULT_COLOR_MAP);
   settings = Object.assign({}, settings, { colorMap: cm });
@@ -932,12 +1284,12 @@ function onColorReset() {
   });
 }
 
-// swatch radiogroup 键盘导航：行内左右键换选（同 theme-grid 交互；Tab 按行进入）
+// swatch radiogroup 键盘导航
 function onColorGridKeydown(e) {
-  const btn = e.target.closest('.color-swatch');
+  const btn = e.target.closest('.color-swatch-halo, .color-swatch');
   if (!btn) return;
   const row = btn.parentElement && btn.parentElement.parentElement;
-  const swatches = row ? Array.prototype.slice.call(row.querySelectorAll('.color-swatch')) : [];
+  const swatches = row ? Array.prototype.slice.call(row.querySelectorAll('.color-swatch-halo, .color-swatch')) : [];
   const idx = swatches.indexOf(btn);
   if (idx < 0) return;
   let next = -1;
@@ -948,22 +1300,18 @@ function onColorGridKeydown(e) {
   else return;
   e.preventDefault();
   swatches[next].focus();
-  swatches[next].click(); // 换选并即时生效（click 走 onColorSelect）
+  swatches[next].click();
 }
 
 function toggleSettings(force) {
-  const panel = $('settings-panel');
-  const show = (force !== undefined) ? force : panel.classList.contains('hidden');
-  panel.classList.toggle('hidden', !show);
-  if (show) {
-    renderSettingsForm();
-    $('settings-error').classList.add('hidden');
-  }
+  const show = (force !== undefined) ? force : activeTab !== 'sett';
+  switchV6(show ? 'sett' : 'dash');
 }
 
 function saveSettings() {
   const port = parseInt($('set-port').value, 10);
   const badge = parseInt($('set-badge').value, 10);
+  const retention = parseInt($('set-retention').value, 10);
   const profile = $('set-profile').value.trim();
   const errEl = $('settings-error');
 
@@ -979,6 +1327,12 @@ function saveSettings() {
     markFieldInvalid('set-badge');
     return;
   }
+  if (!Number.isInteger(retention) || retention < 0 || retention > 1440) {
+    errEl.textContent = '完成会话保留时长必须是 0-1440 分钟的整数（0 = 不显示已完成会话）';
+    errEl.classList.remove('hidden');
+    markFieldInvalid('set-retention');
+    return;
+  }
 
   const next = {
     port,
@@ -988,6 +1342,7 @@ function saveSettings() {
     theme: settings ? settings.theme : DEFAULT_SETTINGS.theme, // 保留主题选择（M6）
     attention: $('set-attention').checked, // M8 徽标提醒开关（design §8.9）
     attentionDone: $('set-attention-done').checked, // M8.1 完成提醒「绿!」独立开关（M10.1 定稿色）
+    retentionMins: retention, // M11 完成会话保留时长
     colorMap: settings ? settings.colorMap : DSHColors.DEFAULT_COLOR_MAP, // M10 保留颜色语义（点选即生效，保存不覆盖）
   };
 
