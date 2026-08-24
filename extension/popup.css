@@ -29,7 +29,7 @@
   --dsw-static-green-500: rgb(34, 197, 94);
   --dsw-static-amber-500: rgb(245, 158, 11);
   --dsw-static-amber-600: rgb(221, 134, 41);
-  --dsw-static-violet-500: rgb(139, 92, 246); /* §8.9.1 紫=「等你拍板」专用（徽标同源 #8b5cf6） */
+  --dsw-static-violet-500: rgb(139, 92, 246); /* 预设色板「紫」（M10.1 起非默认等待色；可经颜色角色区选择） */
   --dsw-static-red-50: rgb(254, 242, 242);
   --dsw-static-red-400: rgb(242, 90, 90);
   --dsw-static-red-600: rgb(236, 19, 19);
@@ -63,14 +63,13 @@
   --dsw-alias-state-warn-label: var(--dsw-static-amber-600);
   --dsw-alias-state-error-primary: var(--dsw-static-red-600);
   --dsw-state-ongoing: var(--dsw-static-deepseek-450);
-  /* M10 颜色语义（design §8.12）：默认色板 = 提案值；colors.js 按 settings.colorMap
-     在 documentElement 写 inline 覆盖（此处为 js 生效前的 :root 默认值，深浅共用）。
+  /* M10 颜色语义（design §8.12）——M10.1 定稿色板（2026-08-24 用户拍板）：colors.js 按
+     settings.colorMap 在 documentElement 写 inline 覆盖（此处为 js 生效前的 :root 默认值，深浅共用）。
+     三角色三色：待确认=琥珀黄 / 进行中=webui 蓝 / 完成=绿（done 并入 completed、idle 不再展示）。
      error 锁定：红色只属于错误（§8.9.1），色值恒为红且不可经 colorMap 修改。 */
-  --dsh-mgr-sem-waiting: var(--dsw-static-violet-500);
-  --dsh-mgr-sem-done: var(--dsw-static-amber-500);
+  --dsh-mgr-sem-waiting: var(--dsw-static-amber-500);
   --dsh-mgr-sem-working: var(--dsw-static-deepseek-450);
   --dsh-mgr-sem-completed: var(--dsw-static-green-500);
-  --dsh-mgr-sem-idle: var(--dsw-static-neutral-bluish-400);
   --dsh-mgr-sem-error: var(--dsw-static-red-600);
   /* 阴影令牌（浅深通用，与 webui 同策略不随主题翻转；popup 浮层强度为自定值） */
   --dsw-shadow-lv1: 0 2px 4px rgba(15, 17, 21, 0.05);
@@ -394,10 +393,9 @@ body {
   background: currentColor;
 }
 
-.session-dot.sdot-working { color: var(--dsh-mgr-sem-working); }  /* 蓝=进行中（M10 统一双载体默认色 #5686fe，提案值待体验定稿；用户可改回琥珀） */
-.session-dot.sdot-waiting { color: var(--dsh-mgr-sem-waiting); }  /* 紫=等你拍板（§8.9.1，可改；改红提示撞色） */
-.session-dot.sdot-completed { color: var(--dsh-mgr-sem-completed); } /* 绿=已完成（可改） */
-.session-dot.sdot-idle { color: var(--dsh-mgr-sem-idle); }         /* 灰=空闲（可改） */
+.session-dot.sdot-working { color: var(--dsh-mgr-sem-working); }  /* 蓝=进行中（M10.1 定稿 #5686fe） */
+.session-dot.sdot-waiting { color: var(--dsh-mgr-sem-waiting); }  /* 黄=待确认（M10.1 定稿 #f59e0b，webui 计划面板同色系；改红提示撞色） */
+.session-dot.sdot-completed { color: var(--dsh-mgr-sem-completed); } /* 绿=完成（M10.1 定稿 #22c55e；徽标「!」同色） */
 
 /* 四态全呼吸（2026-08-23 用户决策：各颜色/状态都要呼吸，动画仅辅助——
    文字状态词仍为主语义；与实例状态点同关键帧同周期，相位由 popup.js

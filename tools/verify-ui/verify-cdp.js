@@ -40,13 +40,12 @@ const results = [];
 let chromeProc = null;
 let browserWs = null;
 
-// M10 颜色语义默认色板（design §8.12 提案值；与 colors.js DEFAULT / background.js DEFAULT 一致）
+// M10 颜色语义默认色板（M10.1 定稿 2026-08-24：三角色三色——等待黄/进行中蓝/完成绿；
+// done 并入 completed、idle 不再展示；与 colors.js DEFAULT / background.js DEFAULT 一致）
 const DSH_COLORS_DEFAULT = {
-  waiting: '#8b5cf6',
-  done: '#f59e0b',
+  waiting: '#f59e0b',
   working: '#5686fe',
   completed: '#22c55e',
-  idle: '#adb2b8',
 };
 
 // M8 e2e（2026-08-24 起徽标计数与 popup 会话区同源）：content script 同源端点
@@ -494,7 +493,8 @@ async function main() {
       });
 
       // 8a) M8.1 徽标提醒（design §8.9/§8.9.1）：storage attentionMap 驱动徽标分层渲染——
-      //     徽标=会话状态层：done → 琥珀「!」；waiting → 紫「?」（等你拍板专用色，覆盖 done）；
+      //     徽标=会话状态层：done → 绿「!」（M10.1 定稿：完成=绿，原琥珀随定稿改绿）；
+      //     waiting → 黄「?」（M10.1 定稿：等待=琥珀黄 #f59e0b，webui 计划面板同色系，覆盖 done）；
       //     working → 蓝「n」（deepseek 蓝 #5686fe，webui --dsh-state-ongoing 同源色）；
       //     优先级 waiting > done > working；清空 → 徽标空（实例状态由图标角标表达）。
       await evalInSw(`(async () => {
@@ -506,10 +506,10 @@ async function main() {
       const doneOk = await waitFor(async () => {
         await evalInSw('applyBadge()');
         const j = await getBadgeJson();
-        return badgeHas(String(j.value || ''), '!', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
+        return badgeHas(String(j.value || ''), '!', /#22c55e|22c55e|34,\s*197,\s*94/i);
       }, 5000);
       const bDone = await getBadgeJson();
-      record('M8：徽标提醒 done → 琥珀「!」（白字）', doneOk,
+      record('M8：徽标提醒 done → 绿「!」（白字；M10.1 定稿完成=绿）', doneOk,
         'badge=' + String(bDone.value || '') + (bDone.raw ? ' ' + bDone.raw : ''));
       await evalInSw(`(async () => {
         await chrome.storage.local.set({ attentionMap: { 9861: { kind: 'waiting', working: 0, waiting: 1, at: Date.now(), port: null } } });
@@ -517,12 +517,12 @@ async function main() {
       const waitOk = await waitFor(async () => {
         await evalInSw('applyBadge()');
         const j = await getBadgeJson();
-        return badgeHas(String(j.value || ''), '?', /#8b5cf6|8b5cf6|139,\s*92,\s*246/i);
+        return badgeHas(String(j.value || ''), '?', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
       }, 5000);
       const bWait = await getBadgeJson();
-      record('M8：徽标提醒 waiting → 紫「?」（优先级覆盖 done，白字）', waitOk,
+      record('M8：徽标提醒 waiting → 黄「?」（优先级覆盖 done，白字；M10.1 定稿等待=黄）', waitOk,
         'badge=' + String(bWait.value || '') + (bWait.raw ? ' ' + bWait.raw : ''));
-      // M8.1：优先级 done > working（done + 蓝2 并存 → 显示琥珀!）+ working → 蓝 n + 9+ 边界
+      // M8.1：优先级 done > working（done + 蓝2 并存 → 显示绿!）+ working → 蓝 n + 9+ 边界
       await evalInSw(`(async () => {
         await chrome.storage.local.set({ attentionMap: {
           9861: { kind: 'done', working: 0, waiting: 0, at: Date.now(), port: null },
@@ -532,9 +532,9 @@ async function main() {
       const mixOk = await waitFor(async () => {
         await evalInSw('applyBadge()');
         const j = await getBadgeJson();
-        return badgeHas(String(j.value || ''), '!', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
+        return badgeHas(String(j.value || ''), '!', /#22c55e|22c55e|34,\s*197,\s*94/i);
       }, 5000);
-      record('M8.1：徽标优先级 done > working（done 与蓝2 并存显示琥珀!）', mixOk, '');
+      record('M8.1：徽标优先级 done > working（done 与蓝2 并存显示绿!）', mixOk, '');
       await evalInSw(`(async () => {
         await chrome.storage.local.set({ attentionMap: { 9861: { kind: 'working', working: 2, waiting: 0, at: Date.now(), port: null } } });
       })()`);
@@ -567,7 +567,7 @@ async function main() {
       await evalInSw(`(async () => {
         const d = await chrome.storage.local.get({ settings: {} });
         const s = Object.assign({}, d.settings || {});
-        s.colorMap = Object.assign({}, (s.colorMap || {}), { waiting: '#22c55e' }); // 等你拍板→绿
+        s.colorMap = Object.assign({}, (s.colorMap || {}), { waiting: '#22c55e' }); // 待确认→绿（自定义验证）
         await chrome.storage.local.set({
           settings: s,
           attentionMap: { 9861: { kind: 'waiting', working: 0, waiting: 1, at: Date.now(), port: null } },
@@ -591,10 +591,11 @@ async function main() {
       const m10RestoreOk = await waitFor(async () => {
         await evalInSw('applyBadge()');
         const j = await getBadgeJson();
-        // getBadgeJson 返回整对象 JSON（{"text":"...","bg":[...]}）：空文本按 '"text":""' 判定
-        return /"text":""/.test(String(j.value || '')) || badgeHas(String(j.value || ''), '?', /139,\s*92,\s*246/);
+        // getBadgeJson 返回整对象 JSON（{"text":"...","bg":[...]}）：空文本按 '"text":""' 判定；
+        // 恢复默认后 waiting 应为琥珀黄（M10.1 定稿默认 #f59e0b）
+        return /"text":""/.test(String(j.value || '')) || badgeHas(String(j.value || ''), '?', /245,\s*158,\s*11/);
       }, 5000);
-      record('M10：徽标恢复默认色板（waiting 回紫，或空——依 attentionMap 当前值）', m10RestoreOk, '');
+      record('M10：徽标恢复默认色板（waiting 回黄，或空——依 attentionMap 当前值）', m10RestoreOk, '');
       // M8.1 盲审修补（H1 对称）：attentionDone 关闭瞬间剔除既有 done 条目——
       // 重开开关时不冒陈旧「工作完成」（done 仅在关闭后被 source 拒绝，不会被新写入）
       await evalInSw(`(async () => {
@@ -612,14 +613,14 @@ async function main() {
         return /"hasDone":false/.test(String(m.value || ''));
       }, 5000);
       const doneOffInfo = await evalInSw(`(async () => JSON.stringify(await chrome.storage.local.get({ attentionMap: {} })))()`);
-      record('M8.1：attentionDone 关闭剔除 done 条目（重开不冒陈旧琥珀!）', doneOffOk,
+      record('M8.1：attentionDone 关闭剔除 done 条目（重开不冒陈旧绿!）', doneOffOk,
         'map=' + String(doneOffInfo.value || '') + (doneOffInfo.raw ? ' ' + doneOffInfo.raw : ''));
       await evalInSw(`(async () => {
         await chrome.storage.local.set({ settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, attention: true, attentionDone: true, theme: 'follow-webui' } });
       })()`);
 
       // 8a-2) M8 端到端（content script → SW，真实链路）：真实 dsh 页面切后台 →
-      //       等待/完成信号 → 紫「?」/琥珀「!」（以 storage attentionMap 条目为链路证据）。
+      //       等待/完成信号 → 黄「?」/绿「!」（以 storage attentionMap 条目为链路证据）。
       //       2026-08-24 起徽标计数与 popup 会话区同源：content script 优先读同源端点
       //       GET /_manager/sessions（DOM 扫描仅回退）——本轮 e2e 先探测端点可用性：
       //       可用（实例装配套插件）→ Fetch 域 mock 端点响应驱动真实链路（端点驱动路径）；
@@ -648,7 +649,7 @@ async function main() {
         } catch (_) { epAvailable = false; }
         log('M8 e2e 端点可用性: ' + epAvailable + '（endpoint=/_manager/sessions @ ' + dshPort + '）');
 
-        // —— waiting 链路：端点驱动（mock）或 DOM 注入回退 → attentionMap 条目 + 紫「?」——
+        // —— waiting 链路：端点驱动（mock）或 DOM 注入回退 → attentionMap 条目 + 黄「?」——
         if (epAvailable) {
           await page.send('Fetch.enable', { patterns: [{ urlPattern: '*_manager/sessions', requestStage: 'Request' }] });
           sessionsMockProvider = () => ([
@@ -658,10 +659,10 @@ async function main() {
           const wAttOk = await waitFor(() => attEntryKind('waiting'), 8000);
           const wBadgeOk = await waitFor(async () => {
             const j = await getBadgeJson();
-            return badgeHas(String(j.value || ''), '?', /#8b5cf6|8b5cf6|139,\s*92,\s*246/i);
+            return badgeHas(String(j.value || ''), '?', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
           }, 4000);
           const bAtt = await getBadgeJson();
-          record('M8：e2e 后台+等待信号 → 紫「?」（端点驱动，与 popup 会话区同源；attentionMap 条目为链路证据）',
+          record('M8：e2e 后台+等待信号 → 黄「?」（端点驱动，与 popup 会话区同源；attentionMap 条目为链路证据）',
             wAttOk && wBadgeOk,
             'badge=' + String(bAtt.value || '') + ' base=' + JSON.stringify(base) + (bAtt.raw ? ' ' + bAtt.raw : ''));
           sessionsMockProvider = null;
@@ -683,10 +684,10 @@ async function main() {
           const wAttOk = await waitFor(() => attEntryKind('waiting'), 8000);
           const wBadgeOk = await waitFor(async () => {
             const j = await getBadgeJson();
-            return badgeHas(String(j.value || ''), '?', /#8b5cf6|8b5cf6|139,\s*92,\s*246/i);
+            return badgeHas(String(j.value || ''), '?', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
           }, 4000);
           const bAtt = await getBadgeJson();
-          record('M8：e2e 后台+等待标记 → 紫「?」（DOM 回退路径，插件端点不可用；attentionMap 条目为链路证据）',
+          record('M8：e2e 后台+等待标记 → 黄「?」（DOM 回退路径，插件端点不可用；attentionMap 条目为链路证据）',
             wAttOk && wBadgeOk,
             'badge=' + String(bAtt.value || '') + ' base=' + JSON.stringify(base) + (bAtt.raw ? ' ' + bAtt.raw : ''));
           await page.send('Runtime.evaluate', {
@@ -714,7 +715,7 @@ async function main() {
           record('M8：e2e 工作→完成（done）链路——基线存在真实工作中会话，本段如实记录（非失败）',
             true, 'ongoing=' + base2.ongoing + '（真实 dsh 会话仍在运行；done 链路待空闲环境覆盖）');
         } else if (epAvailable) {
-          // 端点驱动：mock 先返回工作中项 → 随后空（工作→空闲稳定 1.2s 事件沿 → 琥珀!）
+          // 端点驱动：mock 先返回工作中项 → 随后空（工作→空闲稳定 1.2s 事件沿 → 绿!）
           await page.send('Fetch.enable', { patterns: [{ urlPattern: '*_manager/sessions', requestStage: 'Request' }] });
           let phase = 0;
           sessionsMockProvider = () => {
@@ -726,7 +727,7 @@ async function main() {
           const dAttOk = await waitFor(() => attEntryKind('done'), 14000);
           const dBadgeOk = await waitFor(async () => {
             const j = await getBadgeJson();
-            return badgeHas(String(j.value || ''), '!', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
+            return badgeHas(String(j.value || ''), '!', /#22c55e|22c55e|34,\s*197,\s*94/i);
           }, 4000);
           const bDone2 = await getBadgeJson();
           let doneDiag = '';
@@ -740,7 +741,7 @@ async function main() {
             });
             doneDiag = ' diag=' + String(rd && rd.result && rd.result.value || '');
           } catch (_) { /* 诊断非关键 */ }
-          record('M8：e2e 工作→完成 → 琥珀「!」（端点驱动；attentionMap 有 done 条目为链路证据）',
+          record('M8：e2e 工作→完成 → 绿「!」（端点驱动；attentionMap 有 done 条目为链路证据）',
             dAttOk && dBadgeOk,
             'badge=' + String(bDone2.value || '') + ' base=' + JSON.stringify(base2) + ' mockHits=' + sessionsMockHits + doneDiag + (bDone2.raw ? ' ' + bDone2.raw : ''));
           sessionsMockProvider = null;
@@ -767,10 +768,10 @@ async function main() {
           const dAttOk = await waitFor(() => attEntryKind('done'), 9000);
           const dBadgeOk = await waitFor(async () => {
             const j = await getBadgeJson();
-            return badgeHas(String(j.value || ''), '!', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
+            return badgeHas(String(j.value || ''), '!', /#22c55e|22c55e|34,\s*197,\s*94/i);
           }, 4000);
           const bDone2 = await getBadgeJson();
-          record('M8：e2e 工作→完成 → 琥珀「!」（DOM 回退路径；attentionMap 有 done 条目为链路证据）',
+          record('M8：e2e 工作→完成 → 绿「!」（DOM 回退路径；attentionMap 有 done 条目为链路证据）',
             dAttOk && dBadgeOk,
             'badge=' + String(bDone2.value || '') + ' base=' + JSON.stringify(base2) + (bDone2.raw ? ' ' + bDone2.raw : ''));
         }
@@ -1329,15 +1330,15 @@ async function main() {
     const origData = sessionsData;
     // 1) 初始（sessionsData=null）→ 会话区隐藏（不报错）
     sessionsData = null; state = 'running'; render(); await frame(); out.initial = snap();
-    // 2) 四态渲染 + 无 title 降级为「会话 #<id 前8>」
+    // 2) 三态渲染（M10.1 起遵循 Web UI：idle 不渲染）+ 无 title 降级为「会话 #<id 前8>」
     sessionsData = {
       available: true,
       items: [
         { sessionId: 'session-working-1', title: '正在推进的会话', state: 'working', updatedAt: 1, blank: false },
-        { sessionId: 'session-waiting-1', title: '等你拍板', state: 'waiting', updatedAt: 2, blank: false },
+        { sessionId: 'session-waiting-1', title: '等待确认中', state: 'waiting', updatedAt: 2, blank: false },
         { sessionId: 'session-completed-1', title: '已完成会话', state: 'completed', updatedAt: 3, blank: false },
-        { sessionId: 'session-idle-1', title: '空闲', state: 'idle', updatedAt: 4, blank: false },
-        { sessionId: 'session-untitled-abcdef12', state: 'idle', updatedAt: 5, blank: false },
+        { sessionId: 'session-idle-1', title: '空闲测试（应被过滤）', state: 'idle', updatedAt: 4, blank: false },
+        { sessionId: 'session-untitled-abcdef12', state: 'completed', updatedAt: 5, blank: false },
       ],
     };
     render(); await frame(); out.filled = snap();
@@ -1349,7 +1350,7 @@ async function main() {
     state = 'running'; render(); await frame(); out.degradeRunning = snap();
     state = 'stopped'; render(); await frame(); out.degradeStopped = snap();
     // 5) 折叠：默认展开，点击头折叠（aria-expanded 同步），再点恢复
-    sessionsData = { available: true, items: [{ sessionId: 's-collapse-1', title: '折叠测试', state: 'idle', updatedAt: 6 }] };
+    sessionsData = { available: true, items: [{ sessionId: 's-collapse-1', title: '折叠测试', state: 'completed', updatedAt: 6 }] };
     state = 'running'; render(); await frame();
     const toggle = document.getElementById('sessions-toggle');
     if (toggle) toggle.click();
@@ -1377,22 +1378,25 @@ async function main() {
   record('M9：sessionsData 空（初始/失败）时会话区隐藏（计数同时清空）',
     m9ok(m9.initial) && m9.initial.hidden === true && m9.initial.count === '',
     JSON.stringify(m9.initial));
-  record('M9：四态会话渲染（计数 + 行标题与文字状态词 + 圆点色表）',
-    m9ok(m9.filled) && m9.filled.hidden === false && m9.filled.count === '5'
-      && m9.filled.rows.length === 5
-      && m9.filled.rows[0].state === '进行中' && m9.filled.rows[0].dotColor === 'rgb(86, 134, 254)' // M10：working 默认统一 webui 蓝 #5686fe（提案值）
-      && m9.filled.rows[1].state === '等你拍板' && m9.filled.rows[1].dotColor === 'rgb(139, 92, 246)'
-      && m9.filled.rows[2].state === '已完成' && m9.filled.rows[2].dotColor === 'rgb(34, 197, 94)'
-      && m9.filled.rows[3].state === '空闲' && m9.filled.rows[3].dot === 'session-dot sdot-idle',
+  record('M9：三态会话渲染（计数 + 行标题与文字状态词 + 圆点色表；M10.1 定稿三态三色+idle 过滤）',
+    m9ok(m9.filled) && m9.filled.hidden === false && m9.filled.count === '4'
+      && m9.filled.rows.length === 4
+      && m9.filled.rows[0].state === '进行中' && m9.filled.rows[0].dotColor === 'rgb(86, 134, 254)' // webui 蓝 #5686fe（定稿）
+      && m9.filled.rows[1].state === '待确认' && m9.filled.rows[1].dotColor === 'rgb(245, 158, 11)' // 琥珀黄 #f59e0b（定稿）
+      && m9.filled.rows[2].state === '已完成' && m9.filled.rows[2].dotColor === 'rgb(34, 197, 94)' // 绿 #22c55e（定稿）
+      && m9.filled.rows.every((r) => r.dot.indexOf('sdot-idle') === -1), // idle 行不渲染
     JSON.stringify(m9.filled && m9.filled.rows));
-  record('M9：会话指示灯四态全呼吸 + 光晕分层（用户决策 2026-08-23：各状态都呼吸、补光晕）',
-    m9ok(m9.filled) && m9.filled.rows.length === 5
+  record('M9：idle（空闲）不再渲染（M10.1 定稿：遵循 Web UI 区分，仅三态；5 项含 1 idle → 显示 4）',
+    m9ok(m9.filled) && m9.filled.count === '4' && m9.filled.rows.length === 4
+      && m9.filled.rows.every((r) => r.dot.indexOf('sdot-idle') === -1 && r.state !== '空闲'),
+    'count=' + m9.filled.count + ' rows=' + m9.filled.rows.length);
+  record('M9：会话指示灯三态全呼吸 + 光晕分层（用户决策 2026-08-23：各状态都呼吸、补光晕）',
+    m9ok(m9.filled) && m9.filled.rows.length === 4
       && m9.filled.rows[0].dotAnim === 'dsh-dot-breathe'
       && m9.filled.rows[1].dotAnim === 'dsh-dot-breathe'
       && m9.filled.rows[2].dotAnim === 'dsh-dot-breathe'
-      && m9.filled.rows[3].dotAnim === 'dsh-dot-breathe'
       && m9.filled.rows[0].dotHalo === 'dsh-halo-breathe'
-      && m9.filled.rows[3].dotHalo === 'dsh-halo-breathe'
+      && m9.filled.rows[2].dotHalo === 'dsh-halo-breathe'
       && parseFloat(m9.filled.rows[0].dotHaloOpacity) >= 0.08
       && parseFloat(m9.filled.rows[0].dotHaloOpacity) <= 0.16,
     JSON.stringify(m9.filled && m9.filled.rows.map((r) => ({ s: r.state, a: r.dotAnim, h: r.dotHalo, ho: r.dotHaloOpacity }))));
@@ -1404,8 +1408,8 @@ async function main() {
       return Math.max(...ok.map((v) => v.p)) - Math.min(...ok.map((v) => v.p)) < 0.045;
     })(), 'phases=' + JSON.stringify(m9ok(m9.filled) ? m9.filled.phases : m9.filled));
   record('M9：无 title 会话降级为「会话 #<id 前 8>」',
-    m9ok(m9.filled) && m9.filled.rows[4].title === '会话 #session-',
-    JSON.stringify(m9.filled && m9.filled.rows[4]));
+    m9ok(m9.filled) && m9.filled.rows[3].title === '会话 #session-',
+    JSON.stringify(m9.filled && m9.filled.rows[3]));
   record('M9：available 且无会话 → 空态「暂无会话」',
     m9ok(m9.empty) && m9.empty.hidden === false && m9.empty.emptyHidden === false
       && m9.empty.emptyText === '暂无会话' && m9.empty.listHidden === true,
@@ -1427,7 +1431,7 @@ async function main() {
     JSON.stringify(m9.rowNoClick));
 
   // 14) M10 颜色语义自定义（design §8.12）：settings.colorMap → --dsh-mgr-sem-* 语义变量
-  //     → popup 会话区四态圆点实际色变化；状态展示层（实例）圆点不随会话角色色改
+  //     → popup 会话区三态圆点实际色变化（M10.1 定稿；idle 过滤）；状态展示层（实例）圆点不随会话角色色改
   //     （§8.12 角色表载体限定，2026-08-24 实施注记）；撞色提示 toast；恢复默认；字符语义回归
   log('M10 颜色角色（§8.12）');
   const m10Raw = await evalPage(`(async () => {
@@ -1449,7 +1453,7 @@ async function main() {
     const out = {};
     const origState = state, origData = sessionsData, origSettings = JSON.stringify(settings);
     const origRefresh = refreshSessions; refreshSessions = () => {}; // 冻结轮询覆盖（结束恢复）
-    // 基座：4 态会话 + running 状态卡（默认色板）
+    // 基座：三态会话（含 1 idle 验证过滤）+ running 状态卡（M10.1 定稿默认色板）
     sessionsData = { available: true, items: [
       { sessionId: 's10-1', title: 'T', state: 'working', updatedAt: 1, blank: false },
       { sessionId: 's10-2', title: 'T', state: 'waiting', updatedAt: 2, blank: false },
@@ -1457,21 +1461,21 @@ async function main() {
       { sessionId: 's10-4', title: 'T', state: 'idle', updatedAt: 4, blank: false },
     ]};
     state = 'running'; render(); await tick();
-    out.base = { working: dots()[0], waiting: dots()[1], completed: dots()[2], idle: dots()[3], statusRunning: statusDot() };
-    // 改色：storage 写入 colorMap（waiting→绿、working→琥珀、completed→紫、idle→绿）
+    out.base = { working: dots()[0], waiting: dots()[1], completed: dots()[2], rows: dots().length, statusRunning: statusDot() };
+    // 改色：storage 写入 colorMap（waiting→绿、working→琥珀、completed→紫；M10.1 三角色）
     // —— 经 colors.js storage.onChanged → documentElement 语义变量 → 组件计算色（真实链路）
     const next = Object.assign({}, settings, { colorMap: {
-      waiting: '#22c55e', done: '#f59e0b', working: '#f59e0b', completed: '#8b5cf6', idle: '#22c55e',
+      waiting: '#22c55e', working: '#f59e0b', completed: '#8b5cf6',
     } });
     await new Promise((res) => chrome.storage.local.set({ settings: next }, res));
     await tick();
     out.changed = {
-      working: dots()[0], waiting: dots()[1], completed: dots()[2], idle: dots()[3],
+      working: dots()[0], waiting: dots()[1], completed: dots()[2],
       statusRunning: statusDot(), // 实例层不随角色色改（锁定断言）
       stateWords: [...document.querySelectorAll('.session-state')].map((el) => el.textContent),
       stateClasses: [...document.querySelectorAll('.session-dot')].map((el) => el.className),
     };
-    // 撞色 toast：点「等你拍板」行红色 swatch（UI 真实交互路径）
+    // 撞色 toast：点「待确认」行红色 swatch（UI 真实交互路径）
     const redBtn = document.querySelector('.color-swatch[data-role="waiting"][data-color="#ec1313"]');
     if (redBtn) redBtn.click();
     await tick();
@@ -1488,7 +1492,7 @@ async function main() {
     const resetBtn = document.getElementById('btn-colors-reset');
     if (resetBtn) resetBtn.click();
     await tick();
-    out.reset = { working: dots()[0], waiting: dots()[1], completed: dots()[2], idle: dots()[3], statusRunning: statusDot() };
+    out.reset = { working: dots()[0], waiting: dots()[1], completed: dots()[2], rows: dots().length, statusRunning: statusDot() };
     out.stateWordsAfter = [...document.querySelectorAll('.session-state')].map((el) => el.textContent);
     out.stateClassesAfter = [...document.querySelectorAll('.session-dot')].map((el) => el.className);
     const persisted = await new Promise((res) => chrome.storage.local.get({ settings: {} }, (d) => res(JSON.stringify(d.settings && d.settings.colorMap))));
@@ -1506,23 +1510,22 @@ async function main() {
   let m10 = {};
   try { m10 = JSON.parse(m10Raw); } catch (_) { /* 保持默认 */ }
   const m10ok = (o) => !!(o && o.base && o.base.working);
-  record('M10：默认色板四态会话色（working=webui 蓝 #5686fe / waiting 紫 / completed 绿 / idle 灰）',
+  record('M10：默认色板三态会话色（M10.1 定稿：working=webui 蓝 #5686fe / waiting 琥珀黄 #f59e0b / completed 绿 #22c55e；idle 过滤不渲染）',
     m10ok(m10) && m10.base.working === 'rgb(86, 134, 254)'
-      && m10.base.waiting === 'rgb(139, 92, 246)'
+      && m10.base.waiting === 'rgb(245, 158, 11)'
       && m10.base.completed === 'rgb(34, 197, 94)'
-      && m10.base.idle === 'rgb(173, 178, 184)',
+      && m10.base.rows === 3, // 4 项含 1 idle → 只渲染 3 行
     JSON.stringify(m10.base));
-  record('M10：改色后会话区圆点实际色变化（working 琥珀 / waiting 绿 / completed 紫 / idle 绿）',
+  record('M10：改色后会话区圆点实际色变化（working 琥珀 / waiting 绿 / completed 紫）',
     m10ok(m10) && m10.changed.working === 'rgb(245, 158, 11)'
       && m10.changed.waiting === 'rgb(34, 197, 94)'
-      && m10.changed.completed === 'rgb(139, 92, 246)'
-      && m10.changed.idle === 'rgb(34, 197, 94)',
+      && m10.changed.completed === 'rgb(139, 92, 246)',
     JSON.stringify(m10.changed));
   record('M10：状态展示层（实例）圆点不随会话角色色改（§8.12 角色表载体限定，改色不毁实例语义）',
     m10ok(m10) && m10.base.statusRunning === 'rgb(34, 197, 94)'
       && m10.changed.statusRunning === 'rgb(34, 197, 94)',
     'base=' + m10.base.statusRunning + ' changed=' + m10.changed.statusRunning);
-  record('M10：改「等你拍板」为红色系触发撞色提示 toast（不硬拦——颜色仍为辅助载体）',
+  record('M10：改「待确认」为红色系触发撞色提示 toast（不硬拦——颜色仍为辅助载体）',
     !!m10.red && m10.red.toastVisible === true
       && /撞色/.test(m10.red.toastText || '')
       && m10.red.waiting === 'rgb(236, 19, 19)' && m10.red.swatchSelected === true,
@@ -1531,17 +1534,15 @@ async function main() {
     try {
       const p = JSON.parse(m10.persisted || 'null');
       return !!p && DSH_COLORS_DEFAULT.waiting === p.waiting
-        && DSH_COLORS_DEFAULT.done === p.done
         && DSH_COLORS_DEFAULT.working === p.working
-        && DSH_COLORS_DEFAULT.completed === p.completed
-        && DSH_COLORS_DEFAULT.idle === p.idle;
+        && DSH_COLORS_DEFAULT.completed === p.completed;
     } catch (_) { return false; }
   })();
-  record('M10：恢复默认色板还原（四态 + 状态卡 + storage.colorMap == 默认提案值）',
+  record('M10：恢复默认色板还原（三态 + 状态卡 + storage.colorMap == 定稿默认值）',
     m10ok(m10) && m10.reset.working === 'rgb(86, 134, 254)'
-      && m10.reset.waiting === 'rgb(139, 92, 246)'
+      && m10.reset.waiting === 'rgb(245, 158, 11)'
       && m10.reset.completed === 'rgb(34, 197, 94)'
-      && m10.reset.idle === 'rgb(173, 178, 184)'
+      && m10.reset.rows === 3
       && m10.reset.statusRunning === 'rgb(34, 197, 94)'
       && m10PersistOk === true,
     'reset=' + JSON.stringify(m10.reset) + ' persisted=' + m10.persisted);
@@ -1551,7 +1552,7 @@ async function main() {
   const m10Cls2 = (m10.stateClassesAfter || []).join('|');
   record('M10：字符语义回归（改色前后状态词与圆点类名不变——文字状态词是主语义）',
     m10ok(m10) && m10Words1 === m10Words2 && m10Cls1 === m10Cls2
-      && m10Words1 === '进行中|等你拍板|已完成|空闲',
+      && m10Words1 === '进行中|待确认|已完成',
     'w1=' + m10Words1 + ' w2=' + m10Words2 + ' c1=' + m10Cls1 + ' c2=' + m10Cls2);
 
   // 视觉存档：设置面板「颜色角色」区（恢复默认后的色板，供人工/vision 核验排版）

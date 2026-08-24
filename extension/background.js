@@ -24,16 +24,16 @@ const DEFAULT_SETTINGS = {
   autoOpen: true,
   badgeInterval: 30, // 秒；chrome.alarms 最小周期 0.5 分钟（30s）
   attention: true,   // M8：徽标提醒「该点回来看看了」（design §8.9）
-  attentionDone: true, // M8.1：工作完成提醒「琥珀!」独立开关（默认开；语义见 §8.9）
+  attentionDone: true, // M8.1：工作完成提醒「绿!」独立开关（默认开；语义见 §8.9；M10.1 定稿色）
   theme: 'follow-webui', // M6：与 popup.js 默认值保持一致（防 onInstalled 合并丢弃主题）
-  // M10 颜色语义（design §8.12）：五角色预设色板（提案值，体验后定稿）；error 红与
-  // 字符语义锁定；与 popup.js DEFAULT_SETTINGS 保持一致（防 onInstalled 合并丢弃）
+  // M10 颜色语义（design §8.12）——M10.1 定稿（2026-08-24 用户拍板）：三角色三色——
+  // 待确认=琥珀黄 #f59e0b（webui 计划面板同色系）/ 进行中=webui 蓝 #5686fe / 完成=绿 #22c55e
+  // （done 完成待办消息并入 completed 色：徽标「!」底色取 completed）；idle 不再展示；
+  // error 红与字符语义锁定；与 popup.js DEFAULT_SETTINGS 保持一致（防 onInstalled 合并丢弃）
   colorMap: {
-    waiting: '#8b5cf6',
-    done: '#f59e0b',
+    waiting: '#f59e0b',
     working: '#5686fe',
     completed: '#22c55e',
-    idle: '#adb2b8',
   },
 };
 const PROBE_TIMEOUT_MS = 1500; // 探活超时
@@ -49,10 +49,11 @@ const ACTION_TIMEOUT_MS = {
 };
 
 // ---------------------------------------------------------------------------
-// M8/M8.1 徽标语义分层（design §8.9/§8.9.1，2026-08-22 用户决策）：
+// M8/M8.1 徽标语义分层（design §8.9/§8.9.1，2026-08-22 用户决策；M10.1 定稿 2026-08-24）：
 //   - 徽标（action badge）专职「会话状态层」：字符为主语义——
-//     紫「?」= 等你拍板（专色，不与状态层错误红撞色）、琥珀「!」= 工作完成（事件提醒）、
-//     蓝 n = n 个会话工作中（#5686fe = webui --dsh-state-ongoing 同源色）；
+//     黄「?」= 等待（待确认，M10.1 定稿 #f59e0b，webui 计划面板同色系）、绿「!」= 工作完成
+//     （M10.1 定稿 #22c55e——原琥珀随「完成=绿」定稿改绿）、蓝 n = n 个会话工作中
+//     （#5686fe = webui --dsh-state-ongoing 同源色）；
 //     优先级 waiting > done > working；全空 = 安静。实例运行状态不再上徽标（互斥覆盖问题）。
 //   - 图标角标（action.setIcon）专职「实例状态层」：绿点 = 运行中、红点 = 错误、
 //     无点 = 停止/未安装——与徽标字符同屏共存、互不覆盖（双载体分离）。
@@ -61,22 +62,28 @@ const ACTION_TIMEOUT_MS = {
 const ATTENTION_STORE_KEY = 'attentionMap';
 const ATTENTION_TTL_MS = 4 * 3600 * 1000; // 4h 兜底防僵尸键（正常由 clear/onRemoved/onStartup 清理）
 const ATTENTION_KINDS = { idle: 1, working: 1, waiting: 1, done: 1 };
-// 会话状态层徽标：文字色显式白（徽标字符可见）；蓝 = webui 工作中点阵/状态标签同源色
+// 会话状态层徽标：文字色显式白（徽标字符可见）；底色由 colorMap 运行时覆盖（M10），
+// 此为无 colorMap（旧数据）时的兜底——M10.1 定稿：waiting 黄 / done（完成提醒）绿 / working 蓝
 const SESSION_BADGES = {
-  waiting: { text: '?', bg: '#8b5cf6', fg: '#ffffff', title: 'dsh：正在等你（批准 / 问答 / 计划审查）——点回来看' },
-  done: { text: '!', bg: '#f59e0b', fg: '#ffffff', title: 'dsh：有一轮工作完成——回来看看' },
+  waiting: { text: '?', bg: '#f59e0b', fg: '#ffffff', title: 'dsh：正在等你确认（批准 / 问答 / 计划审查）——点回来看' },
+  done: { text: '!', bg: '#22c55e', fg: '#ffffff', title: 'dsh：有一轮工作完成——回来看看' },
   working: { bg: '#5686fe', fg: '#ffffff' }, // text 动态（n / 9+，applyBadge 覆盖），无字面量
 };
 
 // M10 colorMap 规范化（SW 侧与 colors.js 同口径但零依赖：徽标渲染是纯字符串路径，
-// 不能引入页面脚本）：白名单角色 × 白名单色值（预设色板），非法回退默认色板。
-const BADGE_COLOR_ROLES = { waiting: 1, done: 1, working: 1 };
+// 不能引入页面脚本）：徽标键（waiting/done/working）→ colorMap 键映射，白名单色值
+// （预设色板），非法回退默认色板。M10.1：done 并入 completed 色（徽标「!」取 completed）。
+const BADGE_COLOR_KEYS = { waiting: 'waiting', done: 'completed', working: 'working' };
 const COLOR_PALETTE_HEX = ['#5686fe', '#f59e0b', '#8b5cf6', '#22c55e', '#ec1313', '#adb2b8'];
 function normColorMap(map) {
-  const out = Object.assign({}, DEFAULT_SETTINGS.colorMap);
+  const out = {
+    waiting: DEFAULT_SETTINGS.colorMap.waiting,
+    done: DEFAULT_SETTINGS.colorMap.completed,
+    working: DEFAULT_SETTINGS.colorMap.working,
+  };
   if (map && typeof map === 'object') {
-    for (const kind of Object.keys(BADGE_COLOR_ROLES)) {
-      const v = String(map[kind] || '').toLowerCase();
+    for (const kind of Object.keys(BADGE_COLOR_KEYS)) {
+      const v = String(map[BADGE_COLOR_KEYS[kind]] || '').toLowerCase();
       if (COLOR_PALETTE_HEX.indexOf(v) !== -1) out[kind] = v;
     }
   }
@@ -254,7 +261,7 @@ async function handleAttention(msg, sender) {
 }
 
 // 死提醒联动（M8.1）：实例未运行（port 失活）时清除该端口的会话信号——
-// 此前 4h TTL 内「实例已停、徽标仍挂紫?/琥珀!」的误导场景（design §8.9 item 3 修订）
+// 此前 4h TTL 内「实例已停、徽标仍挂黄?/绿!」的误导场景（design §8.9 item 3 修订）
 async function clearAttentionForPort(port) {
   if (!port) return false;
   let removed = false;

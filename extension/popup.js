@@ -69,13 +69,14 @@ let lastDriftKey = null; // 上次状态漂移提示的键（相同漂移去重�
 // sessionsData===null 表示尚未拿到数据或请求失败（会话区隐藏）。
 let sessionsData = null;
 
-// 会话状态展示层（§8.10 色表，扩展 §8.9.1 紫语义）：
-// 琥珀=进行中 / 紫=等你拍板 / 绿=已完成 / 灰=空闲；文字状态词恒有（防颜色混淆硬规则）
+// 会话状态展示层（§8.10 色表 M10.1 定稿，扩展 §8.9.1）：
+// 蓝=进行中 / 黄=待确认（webui 计划面板同色系）/ 绿=完成；文字状态词恒有（防颜色混淆硬规则）。
+// idle 不再展示（§8.10 idle 注记：live 集合近零出现 + webui 本体不区分）——渲染层过滤；
+// 未知 state 回退 completed 降级渲染（不显示 idle 行）。
 const SESSION_STATE_META = {
   working: { cls: 'sdot-working', label: '进行中' },
-  waiting: { cls: 'sdot-waiting', label: '等你拍板' },
+  waiting: { cls: 'sdot-waiting', label: '待确认' },
   completed: { cls: 'sdot-completed', label: '已完成' },
-  idle: { cls: 'sdot-idle', label: '空闲' },
 };
 
 // 呼吸同步（2026-08-23 用户反馈：呼吸效果整个 popup 同步）：
@@ -364,9 +365,12 @@ function applySessions() {
   const items = sessionsData.items;
   section.classList.remove('hidden');
   hint.classList.add('hidden');
-  count.textContent = items.length > 0 ? String(items.length) : '';
+  // M10.1（2026-08-24 定稿）：遵循 Web UI 区分，只呈现三态——idle 不渲染
+  // （§8.10 idle 注记：live 集合近零出现 + webui 本体不区分；未知态回退 completed 降级渲染）
+  const shown = items.filter((it) => it.state !== 'idle');
+  count.textContent = shown.length > 0 ? String(shown.length) : '';
 
-  if (items.length === 0) {
+  if (shown.length === 0) {
     list.classList.add('hidden');
     empty.classList.remove('hidden');
     empty.textContent = '暂无会话';
@@ -376,8 +380,8 @@ function applySessions() {
   empty.classList.add('hidden');
   list.classList.remove('hidden');
   list.textContent = '';
-  for (const item of items) {
-    const meta = SESSION_STATE_META[item.state] || SESSION_STATE_META.idle;
+  for (const item of shown) {
+    const meta = SESSION_STATE_META[item.state] || SESSION_STATE_META.completed;
     const title = (typeof item.title === 'string' && item.title)
       ? item.title
       : '会话 #' + String(item.sessionId || '').slice(0, 8);
@@ -865,13 +869,11 @@ function onThemeGridKeydown(e) {
 // M10 颜色语义自定义（design §8.12）
 // ---------------------------------------------------------------------------
 
-// 角色展示名（与徽标/会话区状态词一致；字符语义锁定）
+// 角色展示名（与徽标/会话区状态词一致；字符语义锁定；M10.1 定稿三角色）
 const COLOR_ROLE_LABELS = {
-  waiting: '等你拍板',
-  done: '完成待办',
+  waiting: '待确认',
   working: '进行中',
-  completed: '已完成',
-  idle: '空闲',
+  completed: '完成',
 };
 
 // 每角色一行：语义标签 + 当前色点 + 6 个预设圆形 swatch（radiogroup）。
@@ -910,9 +912,10 @@ function onColorSelect(role, color) {
   chrome.storage.local.set({ settings: settings || Object.assign({}, DEFAULT_SETTINGS, { colorMap: cm }) }, () => {
     renderColorGrid(settings.colorMap);
     DSHColors.applyVars(cm); // 立即生效（storage.onChanged 亦会触发，幂等）
-    // 撞色保护：waiting/done/completed 改红系 → 与错误语义撞色提示（§8.12：允许，不硬拦）
+    // 撞色保护：waiting/completed 改红系 → 与错误语义撞色提示（§8.12：允许，不硬拦；
+    // M10.1 done 已并入 completed，撞色判定随三角色）
     if (DSHColors.isReddish(color) &&
-        (role === 'waiting' || role === 'done' || role === 'completed')) {
+        (role === 'waiting' || role === 'completed')) {
       showToast('与错误语义撞色（建议保留互斥色）', 'warn');
     }
   });
@@ -984,7 +987,7 @@ function saveSettings() {
     badgeInterval: badge,
     theme: settings ? settings.theme : DEFAULT_SETTINGS.theme, // 保留主题选择（M6）
     attention: $('set-attention').checked, // M8 徽标提醒开关（design §8.9）
-    attentionDone: $('set-attention-done').checked, // M8.1 完成提醒「琥珀!」独立开关
+    attentionDone: $('set-attention-done').checked, // M8.1 完成提醒「绿!」独立开关（M10.1 定稿色）
     colorMap: settings ? settings.colorMap : DSHColors.DEFAULT_COLOR_MAP, // M10 保留颜色语义（点选即生效，保存不覆盖）
   };
 

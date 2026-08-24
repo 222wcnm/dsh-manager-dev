@@ -6,9 +6,10 @@
 // 零依赖 IIFE，挂 window.DSHColors。popup 与 logs 页共用（脚本标签引入）；
 // 结构同 theme.js：storage 订阅 + documentElement 注入覆盖。
 //
-// 语义角色（可改，设置面板「颜色角色」区）：waiting / done / working /
-// completed / idle；锁定（§8.9.1 硬规则）：error 红（红色只属于错误）、
-// 全部字符/文字/图标语义。改色不改义——颜色始终是辅助载体。
+// 语义角色（可改，设置面板「颜色角色」区；M10.1 定稿三角色）：
+// waiting（待确认）/ working（进行中）/ completed（完成）；
+// 锁定（§8.9.1 硬规则）：error 红（红色只属于错误）、全部字符/文字语义。
+// 改色不改义——颜色始终是辅助载体。
 //
 // 预设色板：只提供白名单色值（浅/深主题均可见），不开放任意输入
 // （design §8.12 约束：色彩工程交给令牌体系）。
@@ -22,16 +23,16 @@
 // ============================================================================
 
 (function () {
-  const ROLES = ['waiting', 'done', 'working', 'completed', 'idle'];
+  // M10.1 定稿（2026-08-24 用户拍板）：遵循 Web UI 区分，只显示三态——
+  // 进行中（蓝）/ 待确认（黄）/ 完成（绿）。done（完成待办消息）并入 completed 色
+  // （徽标「!」底色取 completed）；idle 不再展示（live 集合近零出现，见 design §8.10 注记）。
+  const ROLES = ['waiting', 'working', 'completed'];
 
-  // 默认色板（提案值——design §8.12：最终预设色板待用户实际体验调色后定稿，
-  // 定稿前不得宣称最终设计；M10 交付完整自定义能力 + 体验入口）
+  // 默认色板（**定稿值**——design §8.12 M10.1：用户体验并确认最终色板，已回填）
   const DEFAULT_COLOR_MAP = {
-    waiting: '#8b5cf6',   // 紫=等你拍板（徽标「?」/ 会话区圆点；§8.9.1 紫专语义）
-    done: '#f59e0b',      // 琥珀=完成待办（徽标「!」底）
-    working: '#5686fe',   // 蓝=进行中（webui --dsh-state-ongoing 同源；M10 统一双载体默认色）
-    completed: '#22c55e', // 绿=已完成（会话区圆点）
-    idle: '#adb2b8',      // 灰=空闲（会话区圆点）
+    waiting: '#f59e0b',   // 琥珀黄=待确认（徽标「?」/ 会话区圆点；用户实机观察 webui 计划面板=黄色，取同色系）
+    working: '#5686fe',   // webui 蓝=进行中（徽标「n」/ 会话区圆点；--dsh-state-ongoing 同源）
+    completed: '#22c55e', // 绿=完成（徽标「!」——原琥珀随定稿改绿 + 会话区圆点）
   };
 
   // 预设色板（白名单）：蓝/琥珀/紫/绿/红/灰（复用 dsh 静态令牌值，浅深两套主题均可见）。
@@ -74,7 +75,7 @@
     return out;
   }
 
-  // 与错误红撞色判定（改 waiting/done/completed 时提示；不硬拦）
+  // 与错误红撞色判定（改 waiting/completed 时提示；不硬拦）
   function isReddish(hex) {
     return normHex(hex) === ERROR_COLOR;
   }
