@@ -40,6 +40,15 @@ const results = [];
 let chromeProc = null;
 let browserWs = null;
 
+// M10 颜色语义默认色板（design §8.12 提案值；与 colors.js DEFAULT / background.js DEFAULT 一致）
+const DSH_COLORS_DEFAULT = {
+  waiting: '#8b5cf6',
+  done: '#f59e0b',
+  working: '#5686fe',
+  completed: '#22c55e',
+  idle: '#adb2b8',
+};
+
 // M8 e2e（2026-08-24 起徽标计数与 popup 会话区同源）：content script 同源端点
 // GET /_manager/sessions（端点优先，DOM 仅回退）。e2e 用 Fetch 域拦截该端点请求，
 // 以 sessionsMockProvider() 返回的 items 构造响应驱动真实链路（content script →
@@ -257,7 +266,8 @@ async function main() {
   consoleErrors.length = 0; // 清空：面板步骤在真实 dsh GUI 页面上，其自身日志与扩展无关
 
   // 6) 页面内管理面板（design §8.6）：注入真实 dsh Web UI 页面并断言 shadow 面板
-  const dshUrl = process.env.VERIFY_DSH_URL || 'http://127.0.0.1:8080/';
+  //    默认 3080（design 默认端口 / run 记录）；用户实例在其它端口时用 VERIFY_DSH_URL 覆盖
+  const dshUrl = process.env.VERIFY_DSH_URL || 'http://127.0.0.1:3080/';
   log('访问 dsh Web UI 并检查页面内管理面板: ' + dshUrl);
   await page.send('Page.navigate', { url: dshUrl });
   await sleep(8000); // 等 SPA 加载 + content script 注入 + 首轮 status 轮询
@@ -552,6 +562,39 @@ async function main() {
         return j.value === '';
       }, 5000);
       record('M8.1：提醒清空后徽标清空（实例状态由图标角标表达）', restoreOk, '');
+      // ---- M10 颜色语义（design §8.12）：徽标底色运行时读 settings.colorMap——
+      //     改色后徽标背景变、字符（? / ! / n）不变（字符语义锁定回归）----
+      await evalInSw(`(async () => {
+        const d = await chrome.storage.local.get({ settings: {} });
+        const s = Object.assign({}, d.settings || {});
+        s.colorMap = Object.assign({}, (s.colorMap || {}), { waiting: '#22c55e' }); // 等你拍板→绿
+        await chrome.storage.local.set({
+          settings: s,
+          attentionMap: { 9861: { kind: 'waiting', working: 0, waiting: 1, at: Date.now(), port: null } },
+        });
+      })()`);
+      const m10WaitOk = await waitFor(async () => {
+        await evalInSw('applyBadge()');
+        const j = await getBadgeJson();
+        return badgeHas(String(j.value || ''), '?', /34,\s*197,\s*94/); // 绿底 + 字符「?」恒在
+      }, 5000);
+      const bM10Wait = await getBadgeJson();
+      record('M10：徽标 waiting 底色随 colorMap（改绿；字符「?」不变——字符语义锁定）', m10WaitOk,
+        'badge=' + String(bM10Wait.value || '') + (bM10Wait.raw ? ' ' + bM10Wait.raw : ''));
+      // 恢复默认色板（删除 colorMap 键 → getSettings 合并 DEFAULT → 默认紫）
+      await evalInSw(`(async () => {
+        const d = await chrome.storage.local.get({ settings: {} });
+        const s = Object.assign({}, d.settings || {});
+        delete s.colorMap;
+        await chrome.storage.local.set({ settings: s, attentionMap: {} });
+      })()`);
+      const m10RestoreOk = await waitFor(async () => {
+        await evalInSw('applyBadge()');
+        const j = await getBadgeJson();
+        // getBadgeJson 返回整对象 JSON（{"text":"...","bg":[...]}）：空文本按 '"text":""' 判定
+        return /"text":""/.test(String(j.value || '')) || badgeHas(String(j.value || ''), '?', /139,\s*92,\s*246/);
+      }, 5000);
+      record('M10：徽标恢复默认色板（waiting 回紫，或空——依 attentionMap 当前值）', m10RestoreOk, '');
       // M8.1 盲审修补（H1 对称）：attentionDone 关闭瞬间剔除既有 done 条目——
       // 重开开关时不冒陈旧「工作完成」（done 仅在关闭后被 source 拒绝，不会被新写入）
       await evalInSw(`(async () => {
@@ -1337,7 +1380,7 @@ async function main() {
   record('M9：四态会话渲染（计数 + 行标题与文字状态词 + 圆点色表）',
     m9ok(m9.filled) && m9.filled.hidden === false && m9.filled.count === '5'
       && m9.filled.rows.length === 5
-      && m9.filled.rows[0].state === '进行中' && m9.filled.rows[0].dotColor === 'rgb(221, 134, 41)'
+      && m9.filled.rows[0].state === '进行中' && m9.filled.rows[0].dotColor === 'rgb(86, 134, 254)' // M10：working 默认统一 webui 蓝 #5686fe（提案值）
       && m9.filled.rows[1].state === '等你拍板' && m9.filled.rows[1].dotColor === 'rgb(139, 92, 246)'
       && m9.filled.rows[2].state === '已完成' && m9.filled.rows[2].dotColor === 'rgb(34, 197, 94)'
       && m9.filled.rows[3].state === '空闲' && m9.filled.rows[3].dot === 'session-dot sdot-idle',
@@ -1382,6 +1425,141 @@ async function main() {
     !!m9.rowNoClick && m9.rowNoClick.created === 0 && m9.rowNoClick.role === null
       && m9.rowNoClick.tabIndex === null && m9.rowNoClick.hasPointer === false,
     JSON.stringify(m9.rowNoClick));
+
+  // 14) M10 颜色语义自定义（design §8.12）：settings.colorMap → --dsh-mgr-sem-* 语义变量
+  //     → popup 会话区四态圆点实际色变化；状态展示层（实例）圆点不随会话角色色改
+  //     （§8.12 角色表载体限定，2026-08-24 实施注记）；撞色提示 toast；恢复默认；字符语义回归
+  log('M10 颜色语义（§8.12）');
+  const m10Raw = await evalPage(`(async () => {
+    const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => res())));
+    // 圆点 color 有 0.2s transition：等待 >200ms 再取终值；期间冻结 popup 2s 轮询的
+    // refreshSessions（真实实例在跑时会以真实会话覆盖 mock——M9 现场已见）
+    const tick = () => new Promise((res) => setTimeout(res, 350));
+    const dots = () => {
+      const rows = [...document.querySelectorAll('.session-row')];
+      return rows.map((r) => {
+        const d = r.querySelector('.session-dot');
+        return d ? getComputedStyle(d).color : '';
+      });
+    };
+    const statusDot = () => {
+      const d = document.getElementById('dot');
+      return d ? getComputedStyle(d).color : '';
+    };
+    const out = {};
+    const origState = state, origData = sessionsData, origSettings = JSON.stringify(settings);
+    const origRefresh = refreshSessions; refreshSessions = () => {}; // 冻结轮询覆盖（结束恢复）
+    // 基座：4 态会话 + running 状态卡（默认色板）
+    sessionsData = { available: true, items: [
+      { sessionId: 's10-1', title: 'T', state: 'working', updatedAt: 1, blank: false },
+      { sessionId: 's10-2', title: 'T', state: 'waiting', updatedAt: 2, blank: false },
+      { sessionId: 's10-3', title: 'T', state: 'completed', updatedAt: 3, blank: false },
+      { sessionId: 's10-4', title: 'T', state: 'idle', updatedAt: 4, blank: false },
+    ]};
+    state = 'running'; render(); await tick();
+    out.base = { working: dots()[0], waiting: dots()[1], completed: dots()[2], idle: dots()[3], statusRunning: statusDot() };
+    // 改色：storage 写入 colorMap（waiting→绿、working→琥珀、completed→紫、idle→绿）
+    // —— 经 colors.js storage.onChanged → documentElement 语义变量 → 组件计算色（真实链路）
+    const next = Object.assign({}, settings, { colorMap: {
+      waiting: '#22c55e', done: '#f59e0b', working: '#f59e0b', completed: '#8b5cf6', idle: '#22c55e',
+    } });
+    await new Promise((res) => chrome.storage.local.set({ settings: next }, res));
+    await tick();
+    out.changed = {
+      working: dots()[0], waiting: dots()[1], completed: dots()[2], idle: dots()[3],
+      statusRunning: statusDot(), // 实例层不随角色色改（锁定断言）
+      stateWords: [...document.querySelectorAll('.session-state')].map((el) => el.textContent),
+      stateClasses: [...document.querySelectorAll('.session-dot')].map((el) => el.className),
+    };
+    // 撞色 toast：点「等你拍板」行红色 swatch（UI 真实交互路径）
+    const redBtn = document.querySelector('.color-swatch[data-role="waiting"][data-color="#ec1313"]');
+    if (redBtn) redBtn.click();
+    await tick();
+    const toastEl = document.getElementById('toast');
+    const toastTextEl = document.getElementById('toast-text');
+    const redBtnAfter = document.querySelector('.color-swatch[data-role="waiting"][data-color="#ec1313"]');
+    out.red = {
+      toastVisible: !!toastEl && !toastEl.classList.contains('toast-hidden'),
+      toastText: toastTextEl ? toastTextEl.textContent : '',
+      waiting: dots()[1],
+      swatchSelected: !!redBtnAfter && redBtnAfter.classList.contains('selected'),
+    };
+    // 恢复默认：UI 真实点击「恢复默认色板」
+    const resetBtn = document.getElementById('btn-colors-reset');
+    if (resetBtn) resetBtn.click();
+    await tick();
+    out.reset = { working: dots()[0], waiting: dots()[1], completed: dots()[2], idle: dots()[3], statusRunning: statusDot() };
+    out.stateWordsAfter = [...document.querySelectorAll('.session-state')].map((el) => el.textContent);
+    out.stateClassesAfter = [...document.querySelectorAll('.session-dot')].map((el) => el.className);
+    const persisted = await new Promise((res) => chrome.storage.local.get({ settings: {} }, (d) => res(JSON.stringify(d.settings && d.settings.colorMap))));
+    out.persisted = persisted;
+    // 恢复现场（settings 原值 + 会话数据 + 状态 + 轮询）
+    refreshSessions = origRefresh;
+    sessionsData = origData; state = origState; render();
+    await new Promise((res) => chrome.storage.local.set({ settings: JSON.parse(origSettings) }, res));
+    // 打开设置面板（颜色语义区可见）供视觉存档
+    const settingsBtn = document.getElementById('btn-settings');
+    if (settingsBtn) settingsBtn.click();
+    await new Promise((res) => setTimeout(res, 120));
+    return JSON.stringify(out);
+  })()`);
+  let m10 = {};
+  try { m10 = JSON.parse(m10Raw); } catch (_) { /* 保持默认 */ }
+  const m10ok = (o) => !!(o && o.base && o.base.working);
+  record('M10：默认色板四态会话色（working=webui 蓝 #5686fe / waiting 紫 / completed 绿 / idle 灰）',
+    m10ok(m10) && m10.base.working === 'rgb(86, 134, 254)'
+      && m10.base.waiting === 'rgb(139, 92, 246)'
+      && m10.base.completed === 'rgb(34, 197, 94)'
+      && m10.base.idle === 'rgb(173, 178, 184)',
+    JSON.stringify(m10.base));
+  record('M10：改色后会话区圆点实际色变化（working 琥珀 / waiting 绿 / completed 紫 / idle 绿）',
+    m10ok(m10) && m10.changed.working === 'rgb(245, 158, 11)'
+      && m10.changed.waiting === 'rgb(34, 197, 94)'
+      && m10.changed.completed === 'rgb(139, 92, 246)'
+      && m10.changed.idle === 'rgb(34, 197, 94)',
+    JSON.stringify(m10.changed));
+  record('M10：状态展示层（实例）圆点不随会话角色色改（§8.12 角色表载体限定，改色不毁实例语义）',
+    m10ok(m10) && m10.base.statusRunning === 'rgb(34, 197, 94)'
+      && m10.changed.statusRunning === 'rgb(34, 197, 94)',
+    'base=' + m10.base.statusRunning + ' changed=' + m10.changed.statusRunning);
+  record('M10：改「等你拍板」为红色系触发撞色提示 toast（不硬拦——颜色仍为辅助载体）',
+    !!m10.red && m10.red.toastVisible === true
+      && /撞色/.test(m10.red.toastText || '')
+      && m10.red.waiting === 'rgb(236, 19, 19)' && m10.red.swatchSelected === true,
+    JSON.stringify(m10.red));
+  const m10PersistOk = (() => {
+    try {
+      const p = JSON.parse(m10.persisted || 'null');
+      return !!p && DSH_COLORS_DEFAULT.waiting === p.waiting
+        && DSH_COLORS_DEFAULT.done === p.done
+        && DSH_COLORS_DEFAULT.working === p.working
+        && DSH_COLORS_DEFAULT.completed === p.completed
+        && DSH_COLORS_DEFAULT.idle === p.idle;
+    } catch (_) { return false; }
+  })();
+  record('M10：恢复默认色板还原（四态 + 状态卡 + storage.colorMap == 默认提案值）',
+    m10ok(m10) && m10.reset.working === 'rgb(86, 134, 254)'
+      && m10.reset.waiting === 'rgb(139, 92, 246)'
+      && m10.reset.completed === 'rgb(34, 197, 94)'
+      && m10.reset.idle === 'rgb(173, 178, 184)'
+      && m10.reset.statusRunning === 'rgb(34, 197, 94)'
+      && m10PersistOk === true,
+    'reset=' + JSON.stringify(m10.reset) + ' persisted=' + m10.persisted);
+  const m10Words1 = (m10.changed && m10.changed.stateWords || []).join('|');
+  const m10Words2 = (m10.stateWordsAfter || []).join('|');
+  const m10Cls1 = (m10.changed && m10.changed.stateClasses || []).join('|');
+  const m10Cls2 = (m10.stateClassesAfter || []).join('|');
+  record('M10：字符语义回归（改色前后状态词与圆点类名不变——文字状态词是主语义）',
+    m10ok(m10) && m10Words1 === m10Words2 && m10Cls1 === m10Cls2
+      && m10Words1 === '进行中|等你拍板|已完成|空闲',
+    'w1=' + m10Words1 + ' w2=' + m10Words2 + ' c1=' + m10Cls1 + ' c2=' + m10Cls2);
+
+  // 视觉存档：设置面板「颜色语义」区（恢复默认后的色板，供人工/vision 核验排版）
+  const m10Shot = await page.send('Page.captureScreenshot', { format: 'png' });
+  const m10Png = pathShots('popup-m10.png');
+  fs.writeFileSync(m10Png, Buffer.from(m10Shot.data, 'base64'));
+  record('popup-m10.png 截图（颜色语义区展开）', fs.statSync(m10Png).size > 2000,
+    m10Png + ' (' + fs.statSync(m10Png).size + ' bytes)');
 
   await cleanup();
   const failed = results.filter((r) => !r.ok);

@@ -26,6 +26,15 @@ const DEFAULT_SETTINGS = {
   attention: true,   // M8：徽标提醒「该点回来看看了」（design §8.9）
   attentionDone: true, // M8.1：工作完成提醒「琥珀!」独立开关（默认开；语义见 §8.9）
   theme: 'follow-webui', // M6：与 popup.js 默认值保持一致（防 onInstalled 合并丢弃主题）
+  // M10 颜色语义（design §8.12）：五角色预设色板（提案值，体验后定稿）；error 红与
+  // 字符语义锁定；与 popup.js DEFAULT_SETTINGS 保持一致（防 onInstalled 合并丢弃）
+  colorMap: {
+    waiting: '#8b5cf6',
+    done: '#f59e0b',
+    working: '#5686fe',
+    completed: '#22c55e',
+    idle: '#adb2b8',
+  },
 };
 const PROBE_TIMEOUT_MS = 1500; // 探活超时
 const NATIVE_TIMEOUT_MS = 30000; // 等待宿主响应兜底超时（默认）
@@ -58,6 +67,21 @@ const SESSION_BADGES = {
   done: { text: '!', bg: '#f59e0b', fg: '#ffffff', title: 'dsh：有一轮工作完成——回来看看' },
   working: { bg: '#5686fe', fg: '#ffffff' }, // text 动态（n / 9+，applyBadge 覆盖），无字面量
 };
+
+// M10 colorMap 规范化（SW 侧与 colors.js 同口径但零依赖：徽标渲染是纯字符串路径，
+// 不能引入页面脚本）：白名单角色 × 白名单色值（预设色板），非法回退默认色板。
+const BADGE_COLOR_ROLES = { waiting: 1, done: 1, working: 1 };
+const COLOR_PALETTE_HEX = ['#5686fe', '#f59e0b', '#8b5cf6', '#22c55e', '#ec1313', '#adb2b8'];
+function normColorMap(map) {
+  const out = Object.assign({}, DEFAULT_SETTINGS.colorMap);
+  if (map && typeof map === 'object') {
+    for (const kind of Object.keys(BADGE_COLOR_ROLES)) {
+      const v = String(map[kind] || '').toLowerCase();
+      if (COLOR_PALETTE_HEX.indexOf(v) !== -1) out[kind] = v;
+    }
+  }
+  return out;
+}
 
 // 实例状态层：图标角标（预生成 PNG 变体，tool _gen-icons.js）+ 无会话徽标时的 title
 const ICON_PATHS = {
@@ -437,9 +461,12 @@ async function refreshBadge() {
 function applyBadge() {
   const e = cachedSettings.attention !== false ? pickAggregate() : null;
   if (e) {
-    const b = e.kind === 'working'
-      ? { text: e.n >= 10 ? '9+' : String(e.n), bg: SESSION_BADGES.working.bg, fg: SESSION_BADGES.working.fg, title: 'dsh：' + e.n + ' 个会话正在工作（回到 dsh 页面查看）' }
-      : SESSION_BADGES[e.kind];
+    // M10：底色运行时读 colorMap（一处配置、全域同语义；字符/文字仍为锁定主语义）
+    const cm = normColorMap(cachedSettings.colorMap);
+    const proto = e.kind === 'working'
+      ? { text: e.n >= 10 ? '9+' : String(e.n), bg: cm.working, fg: SESSION_BADGES.working.fg, title: 'dsh：' + e.n + ' 个会话正在工作（回到 dsh 页面查看）' }
+      : Object.assign({}, SESSION_BADGES[e.kind], { bg: cm[e.kind] });
+    const b = proto;
     chrome.action.setBadgeText({ text: b.text });
     chrome.action.setBadgeBackgroundColor({ color: b.bg });
     chrome.action.setBadgeTextColor({ color: b.fg });

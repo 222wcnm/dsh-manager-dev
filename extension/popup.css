@@ -63,6 +63,15 @@
   --dsw-alias-state-warn-label: var(--dsw-static-amber-600);
   --dsw-alias-state-error-primary: var(--dsw-static-red-600);
   --dsw-state-ongoing: var(--dsw-static-deepseek-450);
+  /* M10 颜色语义（design §8.12）：默认色板 = 提案值；colors.js 按 settings.colorMap
+     在 documentElement 写 inline 覆盖（此处为 js 生效前的 :root 默认值，深浅共用）。
+     error 锁定：红色只属于错误（§8.9.1），色值恒为红且不可经 colorMap 修改。 */
+  --dsh-mgr-sem-waiting: var(--dsw-static-violet-500);
+  --dsh-mgr-sem-done: var(--dsw-static-amber-500);
+  --dsh-mgr-sem-working: var(--dsw-static-deepseek-450);
+  --dsh-mgr-sem-completed: var(--dsw-static-green-500);
+  --dsh-mgr-sem-idle: var(--dsw-static-neutral-bluish-400);
+  --dsh-mgr-sem-error: var(--dsw-static-red-600);
   /* 阴影令牌（浅深通用，与 webui 同策略不随主题翻转；popup 浮层强度为自定值） */
   --dsw-shadow-lv1: 0 2px 4px rgba(15, 17, 21, 0.05);
   --dsw-shadow-lv2: 0 6px 24px rgba(15, 17, 21, 0.12);
@@ -176,7 +185,7 @@ body {
 .dot-stopped { color: var(--dsw-static-neutral-bluish-400); }
 .dot-running { color: var(--dsw-alias-state-success-primary); }
 .dot-external { color: var(--dsw-alias-state-business-primary); }
-.dot-error { color: var(--dsw-alias-state-error-primary); }
+.dot-error { color: var(--dsh-mgr-sem-error); } /* M10：红语义集中（error 锁定，值恒等于 alias-state-error） */
 
 /* 运行态呼吸（design §8.8：用户偏好——光晕太难观察，呼吸作用于实心点 + 光晕同步；
    实心点 opacity .5↔1 + scale .88↔1（肉眼可见的脉动），光晕 .08↔.16；
@@ -385,10 +394,10 @@ body {
   background: currentColor;
 }
 
-.session-dot.sdot-working { color: var(--dsw-alias-state-warn-label); }  /* 琥珀=进行中 */
-.session-dot.sdot-waiting { color: var(--dsw-static-violet-500); }        /* 紫=等你拍板（§8.9.1） */
-.session-dot.sdot-completed { color: var(--dsw-alias-state-success-primary); } /* 绿=已完成 */
-.session-dot.sdot-idle { color: var(--dsw-alias-label-caption); }          /* 灰=空闲 */
+.session-dot.sdot-working { color: var(--dsh-mgr-sem-working); }  /* 蓝=进行中（M10 统一双载体默认色 #5686fe，提案值待体验定稿；用户可改回琥珀） */
+.session-dot.sdot-waiting { color: var(--dsh-mgr-sem-waiting); }  /* 紫=等你拍板（§8.9.1，可改；改红提示撞色） */
+.session-dot.sdot-completed { color: var(--dsh-mgr-sem-completed); } /* 绿=已完成（可改） */
+.session-dot.sdot-idle { color: var(--dsh-mgr-sem-idle); }         /* 灰=空闲（可改） */
 
 /* 四态全呼吸（2026-08-23 用户决策：各颜色/状态都要呼吸，动画仅辅助——
    文字状态词仍为主语义；与实例状态点同关键帧同周期，相位由 popup.js
@@ -721,6 +730,13 @@ body {
   color: var(--dsw-static-deepseek-500);
 }
 
+/* M10 撞色提示（设计 §8.12：改红系时提醒，不硬拦）——琥珀提示风格 */
+.toast-warn {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: var(--dsw-static-amber-100, rgb(254, 245, 231));
+  color: var(--dsw-static-amber-600);
+}
+
 /* ---- 无障碍：用户偏好减少动效时关闭动画 ---- */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -934,6 +950,91 @@ body {
 .theme-cube.selected {
   background: var(--dsw-alias-bg-module-platform);
   border-color: var(--dsw-static-neutral-bluish-400);
+}
+
+/* ---- M10 颜色语义（design §8.12）：每角色一行（标签 + 当前色点 + 预设色板） ---- */
+.colors-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-role-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 当前色点（不透明实心，含描边防浅底不可见） */
+.color-chip {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--chip-color, transparent);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35), 0 0 0 1px var(--dsw-alias-border-l2);
+}
+
+.color-swatches {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+
+.color-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--swatch-color, transparent);
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35), 0 0 0 1px var(--dsw-alias-border-l2);
+  transition: transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.color-swatch:hover {
+  transform: scale(1.15);
+}
+
+.color-swatch:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.color-swatch:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+/* 选中态：外圈 + 微放大（与 theme-cube 选中态视觉一致） */
+.color-swatch.selected {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35),
+    0 0 0 2px var(--dsw-alias-label-primary), 0 0 0 3px var(--dsw-alias-bg-module-platform);
+}
+
+.colors-caption {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-caption);
 }
 
 /* ---- 深色主题（M6）----

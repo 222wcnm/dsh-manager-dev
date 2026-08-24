@@ -31,7 +31,13 @@ const ERROR_TEXTS = {
   NATIVE_ERROR: '与宿主通信失败，请确认已安装宿主并重启浏览器',
 };
 
-const DEFAULT_SETTINGS = { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, theme: 'follow-webui', attention: true, attentionDone: true };
+const DEFAULT_SETTINGS = {
+  port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, theme: 'follow-webui',
+  attention: true, attentionDone: true,
+  // M10 颜色语义（design §8.12）：五角色预设色板（提案值，体验后定稿）；error 红与
+  // 字符语义锁定；与 background.js DEFAULT_SETTINGS 保持一致（防 onInstalled 合并丢弃）
+  colorMap: DSHColors.DEFAULT_COLOR_MAP,
+};
 
 // 操作进行中的按钮文案与阶段说明（点击反馈）
 const ACTION_LABELS = {
@@ -91,6 +97,7 @@ function alignBreathe(el) {
 
 async function init() {
   DSHTheme.init(); // M6：尽早应用主题（避免浅色闪烁），并订阅 storage/webuiTheme + matchMedia
+  DSHColors.init(); // M10：尽早应用颜色语义变量（settings.colorMap → --dsh-mgr-sem-*）
   bindEvents();
   await loadSettings();
   renderSettingsForm();
@@ -124,6 +131,15 @@ function bindEvents() {
   });
   // radiogroup 键盘导航（roving tabindex + 方向键/Home/End）
   $('theme-grid').addEventListener('keydown', onThemeGridKeydown);
+  // M10 颜色语义（design §8.12）：预设色板点选即生效（同 theme-cube 交互）；
+  // 每角色一行 radiogroup（swatch 按钮渲染于 renderColorGrid），恢复默认按钮重置全色板
+  $('colors-grid').addEventListener('click', (e) => {
+    const btn = e.target.closest('.color-swatch');
+    if (!btn) return;
+    onColorSelect(btn.getAttribute('data-role'), btn.getAttribute('data-color'));
+  });
+  $('colors-grid').addEventListener('keydown', onColorGridKeydown);
+  $('btn-colors-reset').addEventListener('click', onColorReset);
   // M9 会话区：折叠头（可折叠、默认展开）。会话行为**纯展示**（2026-08-23 修复误导：
   // Web UI 无 URL 会话深链，行点击只能打开实例首页且恢复"上次选中会话"——点某行却进
   // 另一会话，构成误导；导航交互收回给明确语义的「打开 Web UI」按钮；深链见 §8.10 规划）。
@@ -784,6 +800,8 @@ function loadSettings() {
   return new Promise((resolve) => {
     chrome.storage.local.get({ settings: DEFAULT_SETTINGS }, (data) => {
       settings = Object.assign({}, DEFAULT_SETTINGS, (data && data.settings) || {});
+      // M10：colorMap 规范化（白名单角色 × 白名单色值；旧数据/手工写入的非法值回退默认色板）
+      settings.colorMap = DSHColors.normalizeColorMap(settings.colorMap);
       resolve();
     });
   });
@@ -797,6 +815,7 @@ function renderSettingsForm() {
   $('set-attention').checked = settings.attention !== false; // 缺省视为开（向后兼容）
   $('set-attention-done').checked = settings.attentionDone !== false; // M8.1：完成提醒独立开关（缺省开）
   renderThemeGrid();
+  renderColorGrid(settings.colorMap);
 }
 
 // 外观行（M6）：点选即生效。白名单校验 → 更新内存 settings → 写 storage（保留其它字段）
@@ -842,6 +861,93 @@ function onThemeGridKeydown(e) {
   if (target) { target.focus(); target.click(); } // 换选并即时生效（click 走 onThemeSelect）
 }
 
+// ---------------------------------------------------------------------------
+// M10 颜色语义自定义（design §8.12）
+// ---------------------------------------------------------------------------
+
+// 角色展示名（与徽标/会话区状态词一致；字符语义锁定）
+const COLOR_ROLE_LABELS = {
+  waiting: '等你拍板',
+  done: '完成待办',
+  working: '进行中',
+  completed: '已完成',
+  idle: '空闲',
+};
+
+// 每角色一行：语义标签 + 当前色点 + 6 个预设圆形 swatch（radiogroup）。
+// swatch 色值来自 DSHColors.PALETTE 白名单（浅/深主题均可见，无任意输入）。
+function renderColorGrid(map) {
+  const grid = $('colors-grid');
+  if (!grid) return;
+  const cm = DSHColors.normalizeColorMap(map);
+  let html = '';
+  DSHColors.ROLES.forEach((role) => {
+    const cur = cm[role];
+    html += '<div class="color-row" role="radiogroup" aria-label="' + COLOR_ROLE_LABELS[role] + '">'
+      + '<span class="color-role-label">' + COLOR_ROLE_LABELS[role] + '</span>'
+      + '<span class="color-chip" style="--chip-color:' + cur + '" aria-hidden="true"></span>'
+      + '<div class="color-swatches">'
+      + DSHColors.PALETTE.map((p) =>
+        '<button type="button" class="color-swatch' + (p.color === cur ? ' selected' : '') + '"'
+        + ' data-role="' + role + '" data-color="' + p.color + '"'
+        + ' role="radio" aria-checked="' + (p.color === cur ? 'true' : 'false') + '"'
+        + ' aria-label="' + p.name + '" title="' + p.name + '"'
+        + ' style="--swatch-color:' + p.color + '"></button>'
+      ).join('')
+      + '</div></div>';
+  });
+  grid.innerHTML = html;
+}
+
+// 点选即生效（同 theme-cube）：白名单校验（normalizeColorMap）→ 更新内存 settings →
+// 写 storage（保留其它字段）→ DSHColors.applyVars 即时应用；改红撞色提示（不硬拦——
+// 字符/状态词仍是主语义）。
+function onColorSelect(role, color) {
+  if (DSHColors.ROLES.indexOf(role) === -1) return;
+  const cm = DSHColors.normalizeColorMap(settings && settings.colorMap);
+  cm[role] = color;
+  settings = Object.assign({}, settings, { colorMap: cm });
+  chrome.storage.local.set({ settings: settings || Object.assign({}, DEFAULT_SETTINGS, { colorMap: cm }) }, () => {
+    renderColorGrid(settings.colorMap);
+    DSHColors.applyVars(cm); // 立即生效（storage.onChanged 亦会触发，幂等）
+    // 撞色保护：waiting/done/completed 改红系 → 与错误语义撞色提示（§8.12：允许，不硬拦）
+    if (DSHColors.isReddish(color) &&
+        (role === 'waiting' || role === 'done' || role === 'completed')) {
+      showToast('与错误语义撞色（建议保留互斥色）', 'warn');
+    }
+  });
+}
+
+// 恢复默认色板：整表回退 DSHColors.DEFAULT_COLOR_MAP（提案值），即时生效
+function onColorReset() {
+  const cm = Object.assign({}, DSHColors.DEFAULT_COLOR_MAP);
+  settings = Object.assign({}, settings, { colorMap: cm });
+  chrome.storage.local.set({ settings: settings || Object.assign({}, DEFAULT_SETTINGS, { colorMap: cm }) }, () => {
+    renderColorGrid(settings.colorMap);
+    DSHColors.applyVars(cm);
+    showToast('已恢复默认色板', 'success');
+  });
+}
+
+// swatch radiogroup 键盘导航：行内左右键换选（同 theme-grid 交互；Tab 按行进入）
+function onColorGridKeydown(e) {
+  const btn = e.target.closest('.color-swatch');
+  if (!btn) return;
+  const row = btn.parentElement && btn.parentElement.parentElement;
+  const swatches = row ? Array.prototype.slice.call(row.querySelectorAll('.color-swatch')) : [];
+  const idx = swatches.indexOf(btn);
+  if (idx < 0) return;
+  let next = -1;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % swatches.length;
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + swatches.length) % swatches.length;
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = swatches.length - 1;
+  else return;
+  e.preventDefault();
+  swatches[next].focus();
+  swatches[next].click(); // 换选并即时生效（click 走 onColorSelect）
+}
+
 function toggleSettings(force) {
   const panel = $('settings-panel');
   const show = (force !== undefined) ? force : panel.classList.contains('hidden');
@@ -879,6 +985,7 @@ function saveSettings() {
     theme: settings ? settings.theme : DEFAULT_SETTINGS.theme, // 保留主题选择（M6）
     attention: $('set-attention').checked, // M8 徽标提醒开关（design §8.9）
     attentionDone: $('set-attention-done').checked, // M8.1 完成提醒「琥珀!」独立开关
+    colorMap: settings ? settings.colorMap : DSHColors.DEFAULT_COLOR_MAP, // M10 保留颜色语义（点选即生效，保存不覆盖）
   };
 
   chrome.storage.local.set({ settings: next }, () => {
