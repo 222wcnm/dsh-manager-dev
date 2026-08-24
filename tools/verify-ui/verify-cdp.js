@@ -1429,7 +1429,7 @@ async function main() {
   // 14) M10 颜色语义自定义（design §8.12）：settings.colorMap → --dsh-mgr-sem-* 语义变量
   //     → popup 会话区四态圆点实际色变化；状态展示层（实例）圆点不随会话角色色改
   //     （§8.12 角色表载体限定，2026-08-24 实施注记）；撞色提示 toast；恢复默认；字符语义回归
-  log('M10 颜色语义（§8.12）');
+  log('M10 颜色角色（§8.12）');
   const m10Raw = await evalPage(`(async () => {
     const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => res())));
     // 圆点 color 有 0.2s transition：等待 >200ms 再取终值；期间冻结 popup 2s 轮询的
@@ -1497,7 +1497,7 @@ async function main() {
     refreshSessions = origRefresh;
     sessionsData = origData; state = origState; render();
     await new Promise((res) => chrome.storage.local.set({ settings: JSON.parse(origSettings) }, res));
-    // 打开设置面板（颜色语义区可见）供视觉存档
+    // 打开设置面板（颜色角色区可见）供视觉存档
     const settingsBtn = document.getElementById('btn-settings');
     if (settingsBtn) settingsBtn.click();
     await new Promise((res) => setTimeout(res, 120));
@@ -1554,11 +1554,11 @@ async function main() {
       && m10Words1 === '进行中|等你拍板|已完成|空闲',
     'w1=' + m10Words1 + ' w2=' + m10Words2 + ' c1=' + m10Cls1 + ' c2=' + m10Cls2);
 
-  // 视觉存档：设置面板「颜色语义」区（恢复默认后的色板，供人工/vision 核验排版）
+  // 视觉存档：设置面板「颜色角色」区（恢复默认后的色板，供人工/vision 核验排版）
   const m10Shot = await page.send('Page.captureScreenshot', { format: 'png' });
   const m10Png = pathShots('popup-m10.png');
   fs.writeFileSync(m10Png, Buffer.from(m10Shot.data, 'base64'));
-  record('popup-m10.png 截图（颜色语义区展开）', fs.statSync(m10Png).size > 2000,
+  record('popup-m10.png 截图（颜色角色区展开）', fs.statSync(m10Png).size > 2000,
     m10Png + ' (' + fs.statSync(m10Png).size + ' bytes)');
 
   await cleanup();

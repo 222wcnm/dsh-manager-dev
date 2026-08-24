@@ -6,7 +6,7 @@
 // 零依赖 IIFE，挂 window.DSHColors。popup 与 logs 页共用（脚本标签引入）；
 // 结构同 theme.js：storage 订阅 + documentElement 注入覆盖。
 //
-// 语义角色（可改，设置面板「颜色语义」区）：waiting / done / working /
+// 语义角色（可改，设置面板「颜色角色」区）：waiting / done / working /
 // completed / idle；锁定（§8.9.1 硬规则）：error 红（红色只属于错误）、
 // 全部字符/文字/图标语义。改色不改义——颜色始终是辅助载体。
 //

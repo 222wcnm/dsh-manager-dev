@@ -959,7 +959,9 @@ GET /_manager/sessions          （dsh 配套插件，lifecycle 同款 allow() �
 
 ---
 
-### 8.12 颜色语义自定义（M10 规划，2026-08-23 用户提出）
+### 8.12 颜色语义自定义（颜色角色，M10 规划，2026-08-23 用户提出）
+
+> 术语说明（2026-08-24 用户拍板）：设置面板 UI 标签为**「颜色角色」**（直观、点明"每种颜色承担一个角色"）；术语层为**语义色（semantic color）**——design token 标准语，代码 `--dsh-mgr-sem-*` / `settings.colorMap` 与本文标题沿用"颜色语义"表述。
 
 **动机**：语义色表当前是硬编码约定（§8.9.1 / M7 / M9），用户希望可按偏好调整——典型诉求「任务结束（琥珀黄）改成绿色」。**先立规矩**：颜色永远是辅助载体，语义由字符/文字/图标承载（§8.9.1 硬规则不变）——改色不改义，把「完成」改绿后它仍是「完成」，只是表达色不同。
 
@@ -981,7 +983,7 @@ GET /_manager/sessions          （dsh 配套插件，lifecycle 同款 allow() �
 - **M10 顺带纠偏（提案）**：`working` 双载体默认色存在历史分歧——徽标蓝 `#5686fe`（webui 同源）vs popup 会话区琥珀（与状态层 busy 琥珀撞色）。提案统一为 webui 蓝（徽标不变、popup 会话区改蓝；用户可自行改回琥珀）；**该提案值同样待体验后定稿**（体验阶段用户可实际对比琥珀/蓝两种 working 色再定）。
 - **撞色保护**：改 `waiting`/`done`/`completed` 为红色系时 toast 提示「与错误语义撞色（建议保留互斥色）」，但**允许**（主语义仍是字符/文字，颜色只是辅助；不硬拦）。
 
-**交互形态**：popup 设置「界面」分组新增「颜色语义」子区——每个可改角色一行：语义标签 + 当前色块 + **预设色板**（复用 dsh 静态令牌色：蓝/琥珀/紫/绿/红/灰，圆形 swatch 点选即生效，同主题 cube 交互）；另有「恢复默认」按钮。保存进 `settings.colorMap`（`storage.local`，`DEFAULT_SETTINGS` 同步声明默认值）。
+**交互形态**：popup 设置「界面」分组新增「颜色角色」子区（UI 标签；术语层=语义色 semantic color——design token 标准语，2026-08-24 用户拍板）——每个可改角色一行：语义标签 + 当前色块 + **预设色板**（复用 dsh 静态令牌色：蓝/琥珀/紫/绿/红/灰，圆形 swatch 点选即生效，同主题 cube 交互）；另有「恢复默认」按钮。保存进 `settings.colorMap`（`storage.local`，`DEFAULT_SETTINGS` 同步声明默认值）。
 
 **生效范围（一处配置、全域同语义）**：
 - popup 状态卡/hint、会话区圆点、面板胶囊 dot、logs 页状态点——以**语义角色 CSS 变量**（`--dsh-mgr-sem-waiting` 等）注入：`theme.js`（或新 colors.js，popup/logs 共用）读 `colorMap` 写 `:root`/`body` inline 覆盖，组件一律引用语义变量而非字面色值（M7/M9 教训：先立 token 再上色）。
@@ -1000,7 +1002,7 @@ GET /_manager/sessions          （dsh 配套插件，lifecycle 同款 allow() �
 **实施注记（M10 完成，2026-08-24；本节与实现合一后以代码为准）**：
 
 - **生效范围取舍（关键）**：colorMap 严格按上方「语义角色清单」的**载体列**生效——`waiting`→徽标「?」底 + popup 会话区圆点、`done`→徽标「!」底、`working`→徽标「n」底 + 会话区圆点、`completed`/`idle`→会话区圆点。**状态展示层（popup 状态卡/面板胶囊 dot/logs 状态点）不随角色色改**（verify 显式断言「改色后实例圆点不变」）：§8.9.1 状态展示层的主语义载体是颜色本身（绿=运行/蓝=外部/琥珀=过渡/灰=停止/红=错误），若让会话角色色（如 idle 灰）联动实例层，用户把「空闲」改成绿色会把**已停止实例渲染成绿点**——实例层语义被用户配色毁坏，违背「改色不改义」。状态展示层继续走既有 alias 令牌（`--dsw-alias-state-*`，M6 起已是语义变量）；唯一集中化：error 红统一引用 `--dsh-mgr-sem-error`（锁定值 `#ec1313`）。「popup 状态卡/hint、面板胶囊 dot、logs 页状态点在生效范围列」按「均走语义变量（alias 令牌）」落实，不指可配色。
-- **working 双载体统一**：默认值 = webui 蓝 `#5686fe`（`--dsw-static-deepseek-450`，徽标原值不变、popup 会话区由琥珀 `warn-label` 改蓝）——该值仍为**提案值**（§8.12 规划调整：体验后定稿；用户可在「颜色语义」区改回琥珀或其它）。
+- **working 双载体统一**：默认值 = webui 蓝 `#5686fe`（`--dsw-static-deepseek-450`，徽标原值不变、popup 会话区由琥珀 `warn-label` 改蓝）——该值仍为**提案值**（§8.12 规划调整：体验后定稿；用户可在「颜色角色」区改回琥珀或其它）。
 - **新文件**：`extension/colors.js`（`window.DSHColors`，popup 页内联；结构同 theme.js：storage 订阅 + documentElement inline 变量 `--dsh-mgr-sem-<role>`；白名单色板，无任意输入）；`background.js` SW 侧 `normColorMap` 零依赖同口径（徽标渲染是纯字符串路径，不能引入页面脚本）。
 - **验收**（verify-cdp，92/92）：改色后 popup 会话区/徽标底色实际变化 + 实例圆点不变 + 撞色 toast + 恢复默认还原（storage 键级比对）+ 字符语义（`?`/`!`/n/状态词/类名）回归。**注意：verify 默认 dsh URL 已更新为 3080**（此前 8080 为用户旧实例端口；实例在其它端口时 `VERIFY_DSH_URL` 覆盖）。
 
