@@ -8,7 +8,7 @@
 //   - appExit    `ctx.appExit(code)` is a graceful-dispose request: it triggers
 //                the dsh fiber dispose (which closes the listening port) but
 //                does NOT guarantee process exit. Process exit depends on the
-//                event loop draining naturally; the DSH Manager host treats port
+//                event loop draining naturally; the Whalekeeper host treats port
 //                closure as the authoritative signal and falls back to taskkill
 //                when needed. It is NOT a bare process.exit.
 //   - sessions   (optional, read via ctx.get) live session store: `list()`
@@ -76,9 +76,14 @@ function foldTitle(events) {
 // (docs/design.md §8.10 M9.1 spike):
 //   - approval: an `approval/asked` whose id has no matching `approval/decided`
 //     (same blind scan the official api-proxy performs, §8.10 spike);
-//   - question: a `tool/call` of the ask_user_question tool whose callId has no
-//     matching `tool/result` (callId pairing: tool/call.data.callId vs
-//     tool/result.data.message.source.callId).
+//   - question/plan-review: an open tool call awaiting the user — the
+//     `ask_user_question` tool (question) or the `exit_plan_mode` tool
+//     (plan review: dsh-plan-mode blocks on `userQuestions.ask` while the
+//     webui shows the 计划待审 panel; the plan/mode event alone is NOT the
+//     wait signal — it is true from the moment plan writing starts).
+//     callId pairing: tool/call.data.callId vs
+//     tool/result.data.message.source.callId. Ordinary tools (pwsh/edit/...)
+//     running do NOT count — working is not waiting.
 function hasPendingInteraction(events) {
   const asked = new Set()
   const decided = new Set()
@@ -94,7 +99,7 @@ function hasPendingInteraction(events) {
     } else if (event.type === 'tool/call') {
       const callId = event.data?.callId
       const toolName = event.data?.name
-      if (typeof callId === 'string' && toolName === 'ask_user_question') pendingCalls.set(callId, true)
+      if (typeof callId === 'string' && (toolName === 'ask_user_question' || toolName === 'exit_plan_mode')) pendingCalls.set(callId, true)
     } else if (event.type === 'tool/result') {
       const callId = event.data?.message?.source?.callId
       if (typeof callId === 'string') answeredCalls.add(callId)
@@ -179,10 +184,147 @@ function summarizeSession(session, agents, childLabelBy) {
   }
 }
 
+// Live-session child-label index: subagent sessions fold their own
+// `subagent/descriptor` label; unlabelable child runs fall back to no label
+// (the client renders '子代理').
+function buildChildLabelMap(live) {
+  const childLabelBy = new Map()
+  for (const child of live) {
+    if (!child || typeof child !== 'object') continue
+    if (child.header?.origin !== 'subagent') continue
+    const label = foldChildLabel(child.events ?? [])
+    if (label !== undefined) childLabelBy.set(child.id, label)
+  }
+  return childLabelBy
+}
+
+// The full listing payload shared by GET /_manager/sessions and the SSE
+// snapshot — one derivation, two views, so the poll and push surfaces can
+// never drift (subagent sessions never row; archived sessions without
+// running children are omitted, archive masters WITH running children stay).
+function buildItems(ctx, sessions, agents) {
+  const live = sessions.list()
+  const childLabelBy = buildChildLabelMap(live)
+  const workspaceRegistry = ctx.get('workspaceRegistry')
+  const archivedIds = (workspaceRegistry && Array.isArray(workspaceRegistry.archivedSessionIds))
+    ? new Set(workspaceRegistry.archivedSessionIds)
+    : null
+  const items = []
+  for (const session of live) {
+    if (!session || typeof session !== 'object') continue
+    if (session.header?.origin === 'subagent') continue
+    try {
+      const summary = summarizeSession(session, agents, childLabelBy)
+      if (archivedIds !== null && archivedIds.has(session.id) && summary.childRuns.length === 0) continue
+      items.push(summary)
+    } catch {
+      // One malformed session must never take down the whole listing.
+    }
+  }
+  return items
+}
+
+// Semantic diff that gates SSE pushes. `updatedAt` is deliberately excluded:
+// every `assistant/chunk` would otherwise re-push a session that has not
+// actually changed visible state. childRuns is a tiny JSON array — JSON is
+// the simplest exact comparison here.
+function summariesEqual(a, b) {
+  return a.state === b.state
+    && a.title === b.title
+    && a.blank === b.blank
+    && a.cwd === b.cwd
+    && a.hasActiveChildren === b.hasActiveChildren
+    && JSON.stringify(a.childRuns ?? []) === JSON.stringify(b.childRuns ?? [])
+}
+
+// Session-event types that can change a summary's semantic fields. Pushing
+// on any of these and diff-suppressing afterwards keeps the SSE surface at
+// transition granularity while ignoring the high-frequency chunk floods.
+const RELEVANT_EVENT_TYPES = new Set([
+  'approval/asked',
+  'approval/decided',
+  'tool/result',
+  'turn/start',
+  'turn/end',
+  'subagent/start',
+  'subagent/end',
+  'session/title',
+])
+
 export function apply(ctx) {
   // A fresh lifecycle per mount: reset the idempotency guard when the plugin
   // is (re)applied, so a disposed/remounted instance starts clean.
   exiting = false
+  const connections = new Set()
+  const summaryBy = new Map()
+  const pending = new Map()
+  let frameId = 0
+
+  const sseFrame = (event, data) => {
+    frameId += 1
+    return `id: ${frameId}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  }
+  const broadcast = (event, data) => {
+    if (connections.size === 0) return
+    const line = sseFrame(event, data)
+    for (const res of connections) {
+      if (res.writableEnded || res.destroyed) { connections.delete(res); continue }
+      try { res.write(line) } catch { connections.delete(res) }
+    }
+  }
+
+  // Recompute one live session's summary and push on semantic change only.
+  // Mirrors GET /_manager/sessions exactly: subagent origin yields no row;
+  // archived sessions without running children are omitted (a row that becomes
+  // archived is broadcast as `removed` — the GET surface simply omits it).
+  function recompute(sessionId) {
+    const sessions = ctx.get('sessions')
+    if (sessions === undefined) return
+    const session = sessions.get?.(sessionId)
+    if (session === undefined || session === null) return
+    if (session.header?.origin === 'subagent') return
+    const agents = ctx.get('agents')
+    let summary
+    try {
+      summary = summarizeSession(session, agents, buildChildLabelMap(sessions.list()))
+    } catch {
+      return
+    }
+    const workspaceRegistry = ctx.get('workspaceRegistry')
+    const archivedIds = (workspaceRegistry && Array.isArray(workspaceRegistry.archivedSessionIds))
+      ? new Set(workspaceRegistry.archivedSessionIds)
+      : null
+    if (archivedIds !== null && archivedIds.has(sessionId) && summary.childRuns.length === 0) {
+      if (summaryBy.has(sessionId)) {
+        summaryBy.delete(sessionId)
+        broadcast('removed', { sessionId })
+      }
+      return
+    }
+    const prev = summaryBy.get(sessionId)
+    if (prev !== undefined && summariesEqual(prev, summary)) return
+    summaryBy.set(sessionId, summary)
+    broadcast('upsert', { session: summary })
+  }
+
+  function scheduleRecompute(sessionId) {
+    if (pending.has(sessionId)) return
+    pending.set(sessionId, setTimeout(() => {
+      pending.delete(sessionId)
+      recompute(sessionId)
+    }, 50))
+  }
+
+  // Heartbeat: keeps proxies/NAT from idling the stream closed; unref'd so a
+  // disposed plugin never holds the process open.
+  const heartbeat = setInterval(() => {
+    for (const res of connections) {
+      if (res.writableEnded || res.destroyed) { connections.delete(res); continue }
+      try { res.write(': ping\n\n') } catch { connections.delete(res) }
+    }
+  }, 15000)
+  heartbeat.unref()
+
   const dispose = [
     ctx.webServer.register({
       kind: 'exact',
@@ -257,44 +399,104 @@ export function apply(ctx) {
           return
         }
         const agents = ctx.get('agents')
-        // Official workspace registry (registry-global archive set). Absent on
-        // deployments without the workspace plugin — degrade to no filtering.
-        // Archived sessions are hidden from every grouping surface; an archived
-        // session with RUNNING children still shows (perception wins — the work
-        // is not actually finished), while archive masters without children hide.
-        const workspaceRegistry = ctx.get('workspaceRegistry')
-        const archivedIds = (workspaceRegistry && Array.isArray(workspaceRegistry.archivedSessionIds))
-          ? new Set(workspaceRegistry.archivedSessionIds)
-          : null
-        const live = sessions.list()
-        // Subagent label index: live child sessions (origin='subagent') fold
-        // their own descriptor label; child runs not otherwise labelable fall
-        // back to no label (the client renders '子代理').
-        const childLabelBy = new Map()
-        for (const child of live) {
-          if (!child || typeof child !== 'object') continue
-          if (child.header?.origin !== 'subagent') continue
-          const label = foldChildLabel(child.events ?? [])
-          if (label !== undefined) childLabelBy.set(child.id, label)
-        }
-        const items = []
-        for (const session of live) {
-          if (!session || typeof session !== 'object') continue
-          // Subagent sessions never appear as top-level rows: their running
-          // state is folded into the parent's childRuns (webui hides them too).
-          if (session.header?.origin === 'subagent') continue
-          try {
-            const summary = summarizeSession(session, agents, childLabelBy)
-            if (archivedIds !== null && archivedIds.has(session.id) && summary.childRuns.length === 0) continue
-            items.push(summary)
-          } catch {
-            // One malformed session must never take down the whole listing.
-          }
-        }
+        const items = buildItems(ctx, sessions, agents)
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true, items }))
       },
     }),
+    ctx.webServer.register({
+      kind: 'exact',
+      path: '/_manager/events',
+      handler: (req, res) => {
+        if (!allow(req)) {
+          res.writeHead(403)
+          res.end()
+          return
+        }
+        if (req.method !== 'GET') {
+          res.writeHead(405, { allow: 'GET' })
+          res.end()
+          return
+        }
+        const sessions = ctx.get('sessions')
+        if (sessions === undefined) {
+          res.writeHead(500, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ ok: false, error: 'sessions service unavailable' }))
+          return
+        }
+        // SSE handshake: snapshot first, then deltas. Reconnect semantics are
+        // deliberately snapshot-based (no Last-Event-ID replay) — the client
+        // rebuilds its view from the snapshot frame and applies deltas on top.
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          'connection': 'keep-alive',
+        })
+        res.write('retry: 3000\n\n')
+        let items = []
+        try {
+          items = buildItems(ctx, sessions, ctx.get('agents'))
+        } catch {
+          items = []
+        }
+        res.write(sseFrame('snapshot', { ok: true, items }))
+        for (const it of items) summaryBy.set(it.sessionId, it)
+        connections.add(res)
+        res.on('close', () => {
+          connections.delete(res)
+        })
+      },
+    }),
+    // M12 event-driven push surface: the Cordis firehose (app-level listeners
+    // receive every session's events — dsh-scope upward-flow semantics, same
+    // pattern the official apiproxy uses). All callbacks are guarded by
+    // `connections.size === 0`, so zero SSE clients means zero work.
+    ctx.on('session/created', (session) => {
+      if (connections.size === 0) return
+      const id = session?.id
+      if (typeof id !== 'string') return
+      recompute(id)
+    }),
+    ctx.on('session/disposed', (session) => {
+      if (connections.size === 0) return
+      const id = session?.id
+      if (typeof id !== 'string') return
+      if (summaryBy.has(id)) {
+        summaryBy.delete(id)
+        broadcast('removed', { sessionId: id })
+      }
+      // A disposed subagent can also change its parent's childRuns — re-check
+      // every live row (few dozen at most; diff suppresses no-ops).
+      for (const sid of [...summaryBy.keys()]) recompute(sid)
+    }),
+    ctx.on('session/event', (session, event) => {
+      if (connections.size === 0) return
+      const type = event?.type
+      if (type === 'tool/call') {
+        // M12.1：exit_plan_mode（计划审查）与 ask_user_question 同属「等待用户」工具
+        if (event?.data?.name !== 'ask_user_question' && event?.data?.name !== 'exit_plan_mode') return
+      } else if (!RELEVANT_EVENT_TYPES.has(type)) {
+        return
+      }
+      const id = session?.id
+      if (typeof id !== 'string') return
+      scheduleRecompute(id)
+    }),
+    ctx.on('agent/status', (payload) => {
+      if (connections.size === 0) return
+      const id = payload?.agent?.id
+      if (typeof id !== 'string') return
+      recompute(id)
+    }),
+    () => {
+      clearInterval(heartbeat)
+      for (const t of pending.values()) clearTimeout(t)
+      pending.clear()
+      for (const res of connections) {
+        try { res.end() } catch { /* socket already gone */ }
+      }
+      connections.clear()
+    },
   ]
 
   return () => {

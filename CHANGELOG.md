@@ -6,6 +6,34 @@
 ## [未发布] - M4 跨平台/跨浏览器（进行中）
 
 ### Added
+- **M12.2 SSE 帧接收修复——徽标全链路失效根因定位与修复（2026-08-26 用户实机连续反馈，design §8.10.1 契约注记）**：
+  现象：M12 交付后工具栏徽标**全部不亮**——waiting 黄「?」缺失（计划待审/提问/approval 等待期间切后台），且 **working 蓝 n 常驻徽标也不亮**（本会话自身即 working，蓝 n 应常驻）；popup 会话区却正常显示「待确认」。
+  根因：插件 `/_manager/events` 的 SSE 帧**全部带 `event:` 头**（`event: snapshot|upsert|removed`）。按 WHATWG EventSource 规范，带 `event:` 头的帧派发为**命名事件**，**永不触发 `onmessage`**（`onmessage` 只收无 `event:` 头的默认 message 事件）——面板原实现只挂 `instance.onmessage`，导致 `applySseFrame` 从未执行：`sseMap` 恒空、连接真实存在所以 `sseAlive=true` → attTick hidden 分支走纯内存补推 `attApply({working:0,waiting:0})` idle 分支不上报，**且永不回退 1Hz 端点轮询**。popup 正常因会话区走 native `sessions` 2s 轮询（M9 保底独立数据源，与面板 SSE 无关）。verify-cdp 的合成帧挂钩 `__whalekeeper_sse_frame` 直接调 `applySseFrame`，绕过了真实 EventSource 解析——M12 段 101 条断言全绿未能暴露该缺陷。
+  证据链：① netstat 实证用户浏览器（Chrome，PID 52288）持有 4 条到 3080 的 ESTABLISHED 长连接（面板 SSE + WebUI WS），排除「面板未连」；② `.sse-witness` 实测帧格式 `id: N\nevent: snapshot|upsert\ndata: {...}`（插件 `sseFrame()` 生成，witness 捕获 upsert working↔completed 状态切换帧）；③ 规范核验：命名事件不触发 onmessage；④ popup 双数据源确认（native 轮询独立于面板 SSE）。
+  修复（content/panel.js）：帧接收改为 `addEventListener('snapshot'|'upsert'|'removed')` 三命名事件 + `onmessage` 兜底（防御无 `event:` 头的默认帧）；统一把真实帧裸 `e.data`（snapshot→`{ok,items}`、upsert→`{session}`、removed→`{sessionId}`）包成 `applySseFrame` 期望的 `{event, data}` 形状——与 verify 挂钩帧形状完全同构，挂钩零影响；attTick hidden 分支（M12.2 一并补推）在 `sseAlive` 时 `attApply(sseCounts())` 纯内存补推，覆盖「先发帧、后切后台」时序。
+  验收：`node --check` 通过；witness 实证帧带 `event:` 头且状态切换正常推送（插件端无缺陷）；**实机复测闭环（2026-08-26 用户实机：重载扩展 + 刷新页面后，提问等待弹窗切后台 30s → 黄「?」出现）**——蓝 n 同链路修复（`sseCounts` 同时计 working/waiting，同一 attSend 上报），两态均生效。
+- **M12.1 plan-review 等待判定补正（2026-08-26 用户实机反馈，design §8.10 注记）**：计划待审（Web UI「计划待审」面板期间）扩展误判「进行中」（蓝 n）而非「待确认」（黄 ?）——根因：plan-review 的 Web UI 面板由**客户端帧**驱动（`dsh-plan-mode` exit_plan_mode 工具经 `userQuestions.ask` 发出 question/requested 客户端帧，dsh-client-runtime；**不进服务端 session 事件流**——本会话事件流 31 种类型无 question 类，实测），而插件 `hasPendingInteraction` 等待判定只识别 `approval/asked↔decided` 与 `ask_user_question↔tool/result` 两类配对。
+  **修复**：工具配对白名单扩为 `ask_user_question | exit_plan_mode`（提交计划即 tool/call 并阻塞等待，用户确认/拒绝后 tool/result 才 append——实测时序 11:42:51 call → 11:44:28 result）；**不用** `plan/mode {active:true}` 单独判等待（该事件自"模型写计划"阶段即 true，早于等待语义对应时刻）；普通工具（pwsh/edit 等）执行中仍不判等待（工作≠等待）。SSE 推送触发白名单同步扩展（`/_manager/events` 下 exit_plan_mode 的 call/result 也会即时推送状态切换）。
+  验收：插件单测 **50/50**（新增 4 项：未闭合 exit_plan_mode → waiting、闭合回落 working、普通工具不计、SSE 推送 upsert waiting）；`node --check` 全过。
+- **M12 会话推送（SSE，2026-08-26，design §8.10.1；研究文档 `docs/sse-push-research.md`）**：把「被动轮询」升级为「事件驱动主动推送」——
+  延迟从 ≤1s+30s（徽标）/ 2s（popup）降到 **<100ms（面板/徽标）/ <500ms（popup 镜像）**，SSE 活跃时**彻底消除 1Hz 空轮询**。
+  - **插件 `GET /_manager/events`（SSE，零新依赖）**：连接即 `snapshot`（与 `/_manager/sessions` 完全同构，同 `buildItems` 单一派生面），
+    之后仅推 `upsert`/`removed` 增量；**语义 diff**（state/title/blank/cwd/childRuns；`updatedAt` 不参与）抑制高频事件；
+    事件类型白名单（approval/*、tool/call(ask_user_question)、tool/result、turn/start|end、subagent/*、session/title）+ 同会话 50ms debounce 合并；
+    15s 心跳（`: ping`）+ `retry: 3000`；驱动源 = Cordis 事件总线（`session/event|created|disposed` + `agent/status`，app 级订阅接收全部会话事件，
+    0.1.1-rc.2 源码核验——官方 apiproxy 同款订阅模式）；`connections.size===0` 时零重算；dispose 断流（`closeAllConnections`）；
+    403/405/500 语义与 `/_manager/sessions` 一致；官方 `/api/events.host` 不复用（实测 426 WS-only + waiting 需 mux 帧含消息内容，违反 §12.2）。
+  - **面板（content/panel.js）同源 `EventSource` 直连**（§12.2 合规路径：页面 Origin 放行）：`attApply` 状态机提取复用（行为不变），
+    SSE 存活期间 `attTick` 跳过 1Hz 端点快取（0 轮询）；故障三级回退（SSE → 1Hz 端点 → DOM 扫描，现状路径原样保留）；
+    失败重试节流 15s（防插件缺失时空转）。verify 挂钩：`__whalekeeper_sse_frame` DOM 事件（主世界注入合成帧，结构化克隆跨世界；alive 模拟 SSE 健康）。
+  - **popup storage 镜像桥（B2，无宿主协议/权限变更）**：面板事件 → SW `sessions-sync`（L3 同款校验：仅 dsh 回环页 + sender.tab）→
+    `storage.local.sessionsCache`（按端口归并，items ≤50，200ms 防抖；实例失活随 `clearAttentionForPort` 联动清理）→ popup `storage.onChanged` 即时渲染；
+    native `sessions` 2s 快照仅作保底（无标签/镜像缺失时）。**只存 §8.10 同构摘要 items，不读/不存消息内容**（§12.2/§12.3 边界不变）。
+  - 验收：插件单测 **46/46**（33 存量 + 13 新增：快照同构、waiting 推送、状态回落、无关事件零帧、updatedAt diff 抑制、removed、
+    agent/status 状态收敛、归档变化 upsert/removed、断连清理、403/405/500、dispose 断流+监听清、心跳帧、零连接零重算）；
+    verify-cdp 新增 M12 段 4 断言（合成快照→徽标「1」即时、SSE 活跃 2.5s 窗口 0 端点请求、upsert→「?」即时切换、removed→恢复安静）；
+    真实实例 e2e 追加 15.4b（200 SSE + retry + snapshot 帧同构）；`node --check` 全过。
+  - 已知局限：webui 归档集合变更不实时推送（快照/重连时收敛）；popup 镜像依赖至少一个 dsh 标签打开（会话活动时成立）；popup 直连端点仍被 Origin 围栏拒绝（设计如此）。
 - **M11 会话感知升级（2026-08-25，design §8.10 演进「演示层 M11 定稿」）+ M11.1 Popup 空间架构升级（design §8.2，UI 走查定稿）**：
   - **会话区四态感知**：`waiting`(待确认,琥珀) > `working`(进行中,蓝) / `completed+hasActiveChildren`(**已停止**,绿,恒显) > `completed` 无子代理(**已完成**,绿,仅「新鲜」显示)；idle 不渲染。
   - **已读机制（本地展示层，不触碰 dsh 数据）**：已完成行 hover 出现「已读」微药丸，「已读 · 撤销 3s」倒计时（期内可撤销），落库 `readSessions{sessionId:readAt}` 并移除行；会话重新活跃自动重现。

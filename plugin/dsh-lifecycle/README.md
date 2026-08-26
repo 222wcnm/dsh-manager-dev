@@ -12,6 +12,7 @@ Windows 上也能优雅停止（否则只能 `taskkill` 硬杀）。
 | `POST` | `/_lifecycle/shutdown` | `202 {"ok":true}`（重复请求 `409`） | 先刷出响应，再 `appExit(0)`：优雅 dispose 请求（触发 dsh 官方 fiber dispose，端口随之关闭）；进程退出依赖事件循环自然排空，**不保证必然退出**；DSH Manager 宿主以端口关闭为判定权威，必要时 taskkill 回退 |
 | `GET`  | `/_lifecycle/health`    | `200` JSON | 健康/富状态（下见示例） |
 | `GET`  | `/_manager/sessions`    | `200 {"ok":true,"items":[...]}` | **只读会话摘要**（M9）：live 会话的元数据行——`sessionId/title?/state/updatedAt/blank/cwd?`；**不读消息体/事件内容/凭据** |
+| `GET`  | `/_manager/events`      | `200 text/event-stream` | **SSE 会话推送**（M12，零依赖）：连接即 `snapshot`（与 sessions 完全同构，同 `buildItems` 单一派生面）；之后仅语义变化推 `upsert`/`removed` 增量（15s 心跳 `: ping` + `retry: 3000`；重连=重拿快照，无 Last-Event-ID 回放）。驱动源 = Cordis 事件总线（`session/event`/`session/created`/`session/disposed`/`agent/status`，app 级订阅接收全部会话事件——官方 apiproxy 同款模式），**事件内容绝不进入推送面，只出摘要** |
 
 health 响应：
 
@@ -67,11 +68,17 @@ curl -i -X POST http://127.0.0.1:3080/_lifecycle/shutdown
 # 只读会话摘要（M9）
 curl http://127.0.0.1:3080/_manager/sessions
 # → {"ok":true,"items":[...]}
+
+# SSE 会话推送（M12）：连接即快照，之后仅语义变化推增量
+curl -N http://127.0.0.1:3080/_manager/events
+# → retry: 3000
+# → id: 1 / event: snapshot / data: {"ok":true,"items":[...]}
+# → （15s 心跳 : ping；状态切换时 event: upsert / event: removed）
 ```
 
 ## 安装（实测语法，勿臆测）
 
-本插件基于本机安装的 `@deepseek-ai/dsh@0.1.0-rc.6` 源码逐条核验。核心事实：
+本插件基于本机安装的 `@deepseek-ai/dsh@0.1.0-rc.6` 源码逐条核验（**2026-08-26 注记：本机事实基线已漂移至 `0.1.1-rc.2`，M9/M12 所用事件契约（`session/event`·`session/created`·`session/disposed`·`agent/status`）与 webServer 行为已按 0.1.1-rc.2 源码复核，未发现破坏性差异**）。核心事实：
 
 - `dsh plugin --profile <name> <args...>` 是 **pnpm 转发器**：先初始化 profile，再在 profile
   目录里执行 `pnpm <args...>`，随后调用 `reconcilePlugins` 把装了「`dsh.bundle.patch`」声明的

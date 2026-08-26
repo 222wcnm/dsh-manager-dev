@@ -1,6 +1,6 @@
 'use strict';
 
-// DSH Manager — popup 逻辑
+// Whalekeeper — popup 逻辑
 //
 // 行为（docs/design.md §8.2）：
 //   1. 打开即调 status，随后每 2s 轮询（popup 关闭自动停止）；
@@ -168,13 +168,26 @@ async function init() {
   await loadSettings();
   await loadReadSessions(); // M11：已读记录（本地展示层）
   renderSettingsForm();
+  initSessionsMirror(); // M12：storage 镜像桥（面板 SSE → SW → sessionsCache → popup）
   await refreshStatus();
   refreshSessions(); // M9：会话摘要（只读，失败静默降级）
   pollTimer = setInterval(refreshStatus, 2000);
   tickTimer = setInterval(() => {
     renderUptime();
     renderProgress(); // 每秒刷新操作耗时
+    if (pending) renderStatusCard(); // 操作在途时每秒刷新状态卡内的已耗时
   }, 1000);
+}
+
+// M12：订阅镜像变化（面板 SSE 事件流经 SW 写 sessionsCache）+ 初始载入
+function initSessionsMirror() {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.sessionsCache) return;
+    applyMirrorSessions(changes.sessionsCache.newValue || {});
+  });
+  chrome.storage.local.get({ sessionsCache: {} }, (d) => {
+    applyMirrorSessions((d && d.sessionsCache) || {});
+  });
 }
 
 function bindEvents() {
@@ -182,7 +195,7 @@ function bindEvents() {
   $('v6-r-dash').addEventListener('click', () => switchV6('dash'));
   $('v6-r-sess').addEventListener('click', () => switchV6('sess'));
   $('v6-r-sett').addEventListener('click', () => switchV6('sett'));
-  $('btn-sess-open').addEventListener('click', openWebUI);
+  $('btn-sess-open').addEventListener('click', () => openWebUI());
 
   // 兼容旧按钮 ID 契约
   const btnSett = $('btn-settings');
@@ -196,9 +209,24 @@ function bindEvents() {
   $('btn-stop').addEventListener('click', () => doAction('stop'));
   $('btn-restart').addEventListener('click', () => doAction('restart'));
   $('btn-adopt').addEventListener('click', () => doAction('adopt'));
-  $('btn-open').addEventListener('click', openWebUI);
+  $('btn-open').addEventListener('click', () => openWebUI());
   $('btn-copy-log').addEventListener('click', copyLog);
   $('btn-logs').addEventListener('click', openLogs);
+
+  const portText = $('port-text');
+  if (portText) {
+    portText.addEventListener('click', async () => {
+      const port = (portText.textContent || '').trim();
+      if (!port || port === '-' || isNaN(Number(port))) return;
+      const url = `http://127.0.0.1:${port}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast(`已复制 ${url}`, 'success');
+      } catch (_) {
+        showToast(`服务地址: ${url}`, 'info');
+      }
+    });
+  }
 
   // 输入时清除无效反馈
   $('set-port').addEventListener('input', () => clearFieldInvalid('set-port'));
@@ -431,6 +459,19 @@ async function refreshSessions() {
   applySessions();
 }
 
+// M12 镜像桥（design §8.10.1）：面板 SSE 事件流 → SW storage.sessionsCache →
+// popup storage.onChanged 即时渲染（<500ms）。native sessions 快照仍作保底
+// （无 dsh 标签/镜像缺失时）；两者同源同构，后写赢。
+function applyMirrorSessions(cache) {
+  const port = detail && typeof detail.port === 'number' && Number.isFinite(detail.port) ? detail.port : null;
+  if (!port) return; // 状态未就绪/动态端口未回填：等 native 快照
+  if (state !== 'running' && state !== 'external') return;
+  const entry = cache && typeof cache === 'object' ? cache[String(port)] : null;
+  if (!entry || !Array.isArray(entry.items)) return;
+  sessionsData = { available: true, items: entry.items };
+  applySessions();
+}
+
 // 会话区渲染：折叠头计数 + 列表 / 空态 / 降级提示（§8.10 与 V6 导轨联动）。
 // M11：四态感知 —— waiting > working/已停止(有子代理) > 已完成(新鲜且未已读)；
 // idle 不渲染；已完成行 hover 出现「已读」；子代理行作为父行嵌套树行（进行中）。
@@ -594,6 +635,12 @@ function renderSessionUnit(item) {
       rightWrap.appendChild(buildMarkReadBtn(item.sessionId, item.title));
     }
   }
+
+  row.style.cursor = 'pointer';
+  row.addEventListener('click', (e) => {
+    if (e.target.closest('.btn-mark-read, .inline-undo-pill')) return;
+    openWebUI(item.sessionId ? `/#/chat/${item.sessionId}` : '/');
+  });
 
   row.appendChild(leftWrap);
   row.appendChild(rightWrap);
@@ -806,18 +853,98 @@ async function doAction(action) {
 }
 
 // ---------------------------------------------------------------------------
-// 打开 Web UI
+// 打开/智能定向 Web UI（Smart Tab Focus & Reuse）
+// 规则：无则新建并定位，有则定向激活（当前窗口 > 目标会话精准匹配 > 最近活跃 MRU）
 // ---------------------------------------------------------------------------
 
-function openWebUI() {
+async function openWebUI(targetPath) {
   const port = (detail && detail.port) || (settings ? settings.port : DEFAULT_SETTINGS.port);
   if (!port) return; // M4：动态端口未回填时无 URL 可开
-  chrome.tabs.create({ url: 'http://127.0.0.1:' + port + '/' });
+
+  const pathSuffix = (typeof targetPath === 'string' && targetPath) ? targetPath : '/';
+  const targetUrl = 'http://127.0.0.1:' + port + (pathSuffix.startsWith('/') ? pathSuffix : '/' + pathSuffix);
+
+  // DSH Web UI 的两种可能 URL 前缀
+  const prefixes = [
+    'http://127.0.0.1:' + port,
+    'http://localhost:' + port,
+  ];
+
+  try {
+    // 获取所有标签页，在 JS 中手动匹配 URL 前缀
+    // 避免 chrome.tabs.query({ url: pattern }) 的 match pattern 兼容性问题
+    const allBrowserTabs = await chrome.tabs.query({});
+    const matchedTabs = allBrowserTabs.filter(t =>
+      t.url && prefixes.some(p => t.url.startsWith(p))
+    );
+
+    if (matchedTabs.length > 0) {
+      // 获取当前操作所在窗口 ID
+      const currWin = await chrome.windows.getCurrent().catch(() => null);
+      const currentWindowId = currWin ? currWin.id : null;
+
+      // 4 级决策排序：
+      // 1. 精确会话路径匹配优先
+      // 2. 当前窗口优先
+      // 3. 最近活跃 (lastAccessed) 优先
+      matchedTabs.sort((a, b) => {
+        if (pathSuffix && pathSuffix !== '/') {
+          const aMatch = a.url && a.url.includes(pathSuffix);
+          const bMatch = b.url && b.url.includes(pathSuffix);
+          if (aMatch && !bMatch) return -1;
+          if (bMatch && !aMatch) return 1;
+        }
+        if (currentWindowId) {
+          if (a.windowId === currentWindowId && b.windowId !== currentWindowId) return -1;
+          if (b.windowId === currentWindowId && a.windowId !== currentWindowId) return 1;
+        }
+        return (b.lastAccessed || 0) - (a.lastAccessed || 0);
+      });
+
+      const bestTab = matchedTabs[0];
+
+      // 1. 激活标签页
+      await chrome.tabs.update(bestTab.id, { active: true });
+
+      // 2. 唤醒并置顶窗口（若在后台或其他显示器窗口）
+      if (bestTab.windowId) {
+        await chrome.windows.update(bestTab.windowId, { focused: true }).catch(() => {});
+      }
+
+      // 3. 特殊状态处理：
+      // 若处于 Chrome 原生网络报错页或休眠卸载态，执行唤醒重新加载
+      const isErrorPage = bestTab.url && (bestTab.url.startsWith('chrome-error://') || bestTab.status === 'unloaded' || bestTab.discarded);
+      if (isErrorPage) {
+        await chrome.tabs.reload(bestTab.id).catch(() => {});
+      } else if (pathSuffix && pathSuffix !== '/' && bestTab.url && !bestTab.url.includes(pathSuffix)) {
+        // 软路由跳转到目标会话页
+        await chrome.tabs.update(bestTab.id, { url: targetUrl }).catch(() => {});
+      }
+      return;
+    }
+  } catch (e) {
+    console.warn('[Whalekeeper] 智能定向异常，降级为新建标签页:', e);
+  }
+
+  // 无已有标签页或异常降级：新建标签页
+  chrome.tabs.create({ url: targetUrl });
 }
 
-// 打开日志查看页（扩展页面，M3 日志查看，design §8.4）
-function openLogs() {
-  chrome.tabs.create({ url: chrome.runtime.getURL('logs.html') });
+// 打开日志查看页（智能复用已有日志 Tab，避免重复多开）
+async function openLogs() {
+  const logUrl = chrome.runtime.getURL('logs.html');
+  try {
+    const tabs = await chrome.tabs.query({ url: logUrl }).catch(() => []);
+    if (tabs && tabs.length > 0) {
+      const best = tabs[0];
+      await chrome.tabs.update(best.id, { active: true });
+      if (best.windowId) {
+        await chrome.windows.update(best.windowId, { focused: true }).catch(() => {});
+      }
+      return;
+    }
+  } catch (_) {}
+  chrome.tabs.create({ url: logUrl });
 }
 
 // ---------------------------------------------------------------------------
@@ -877,6 +1004,12 @@ function render() {
 
 // 状态词（#state-word）文本映射（M7 状态卡）
 function stateWordText() {
+  if (pending) {
+    if (pending.action === 'restart') return '正在重启…';
+    if (pending.action === 'start') return '正在启动…';
+    if (pending.action === 'stop') return '正在停止…';
+    if (pending.action === 'adopt') return '正在接管…';
+  }
   switch (state) {
     case 'running': return '运行中';
     case 'external': return '外部实例';
@@ -915,6 +1048,14 @@ function formatCompactUptime(ms) {
 
 // 状态卡次级信息（#row2-text）文案（M7）
 function row2Text() {
+  if (pending) {
+    let text = ACTION_LABELS[pending.action].progress[pending.phase] || ACTION_LABELS[pending.action].busy;
+    if (pending.action === 'adopt' && detail && detail.pid) {
+      text += '（PID ' + detail.pid + '）';
+    }
+    const sec = Math.floor((Date.now() - pending.atMs) / 1000);
+    return text + ' · 已耗时 ' + sec + 's';
+  }
   if (state === 'running') {
     const health = detail && detail.health;
     const parts = [];

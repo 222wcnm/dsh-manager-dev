@@ -43,6 +43,8 @@ DeepSeek Harness（以下简称 dsh，npm 包 `@deepseek-ai/dsh`）的 Web 界�
 
 > **2026-08-14 在线复核（外部网络已恢复）**：npm `dist-tags.latest` = `0.1.0-rc.6`（无更高版本/正式版）；GitHub 仓库**无 releases**；GitHub 根 `LICENSE` 逐字核对为 MIT License, Copyright (c) 2026 DeepSeek（与本机 npm 包一致）。官方 `docs/` 文档体系存在且持续更新：`capability-seams.md` 将 `ctx.web` 列为官方 seam（provider 生态：`web-search-exa`、`web-search-perplexity`、`web-search-deepseek`、`web-fetch-http`），`ctx.webServer` 列为 core；`web-styling.md` 规范 `--dsw-*` 令牌；`appExit` 的书面文档仅存在于 `dsh-cmdline` 包 README（顶级 docs 未收录）——与 §7.3 的耦合风险结论一致。**本事实基线成立，无需更新。**
 > ⚠️ **2026-08-23 基线漂移警示（待全面复核）**：本机 dsh 已升级至 `0.1.1-rc.2`（M9 真实实例 e2e 即基于该版本，§8.10 已注明）——本节基于 0.1.0-rc.6 的核验**已过期**；涉及上游语义/API 的章节待按 0.1.1-rc.2 全量复核后更新（webui 事实基线 §8.9 已另按 0.1.1-rc.2 核验）。
+>
+> **2026-08-26 M12 补充核验（事件契约，按本机 0.1.1-rc.2 源码）**：`session/event`（dsh-session `Session.append()` 同步发布钩子，**构造种子/回放事件不发射**）、`session/created`/`session/disposed`、`agent/status`（dsh-agent 的 `agentEvents` 融合发射 `{status, agent}`，dsh-agent-loop `setPhase` 状态转变时触发）；app 级（untagged）订阅者接收**全部**作用域会话事件（dsh-scope `scopeTarget` 向上流动语义）；`dsh-host-webserver` 支持 SSE 所需一切（`register` 精确路由 + dispose `closeAllConnections()` 强制断流）；官方 SSE 先例 `dsh-client-hmr` `GET /plugins/events`（L114-150）。**官方 `/api/events.host` 浏览器通道经实测为 WebSocket-only**（非 Upgrade GET → `426 upgrade required`，dsh-client-connection L538-544；host 帧仅 running bool，waiting 需 mux 帧=含消息内容，违反 §12.2）——M12 自建 SSE 推送端点（§8.10），不复用官方事件通道。
 
 | # | 事实 | 核验来源 | 对设计的影响 |
 |---|------|----------|--------------|
@@ -864,10 +866,12 @@ popup 设置面板新增「外观」行（四个互斥选项按钮），复刻 W
 **触发信号（webui 事实基线，取自 `@deepseek-ai/dsh-client-ui-workspace` 0.1.1-rc.2 客户端包与 `dsh-web-frontend` bundle）**：会话侧栏行由 `StateDot` 渲染——**工作中** = `svg[data-state="ongoing"]`（基线为 10×10 点阵追逐动画；2026-08-22 用户实测当前版本渲染为**蓝色状态标签**（如「Deep diving…」，`--dsh-state-ongoing: --dsw-static-deepseek-450` #5686fe）；徽标蓝 n 与 webui 同源）；**等待用户**（pendingInteraction: approval / question / plan-review）= `span[data-state="warning"]`；空闲/完成 = `data-state="done"`。这组 `data-state` 值是 StateDot 的**语义 API 属性**（非 CSS-module 哈希类名），跨 webui 版本漂移风险低。
 
 > **数据源修订（2026-08-24，徽标←→popup 会话区计数一致性）**：`data-state` 是 webui **显示态**，相对服务端事件流存在前端渲染延迟——会话完成/空闲瞬间扫描会拿到旧计数，且同实例多标签各自上报会被重复累加，产生「徽标蓝 2、popup 会话区进行中 1」的偶发不一致（2026-08-23 用户实机反馈）。**计数改为优先读服务端点** `GET /_manager/sessions`（§8.10，与 popup「会话」区同一端点、同一状态判定），`data-state` DOM 扫描仅作**回退**（插件未装/旧版/端点失败；此时 popup 会话区为降级/隐藏路径，无数字不一致的用户可见面）。同实例多标签的重复计数由 SW 聚合去重（见下第 3 条）。
+>
+> **数据源再修订（2026-08-26，M12 会话推送）**：M12 起徽标计数**改为 SSE 事件流优先**——面板经同源 `EventSource('/_manager/events')` 订阅（§8.10），事件到达即刷新计数并经既有 `attention` 上报（延迟从 ≤1s+30s 降为 <100ms），**SSE 存活期间不再 1Hz 打端点**；端点 `1Hz` 轮询与 DOM 扫描降为**降级回退**（SSE 连接失败/插件缺失时，行为与当前完全一致）。「计数与 popup 会话区同源」性质不变（SSE 与 `/_manager/sessions` 共享同一 `buildItems`/同一状态判定）。
 
 **行为规范（`extension/content/panel.js` 检测段 + `extension/background.js` 双载体渲染）**：
 
-1. **检测（panel.js，只读；2026-08-24 数据源修订）**：与面板共注入（同一指纹激活）。每 1s 取一次计数快照，**端点优先**：同源 `fetch('/_manager/sessions')`（1.5s 超时，失败静默；只读摘要元数据，与 §8.10 同口径，不读消息内容/文本）→ 统计 `items` 中 `state==='working'` / `state==='waiting'` 的数量；端点不可用（插件未装/旧版/网络失败）时**回退** DOM 扫描（`svg[data-state="ongoing"]`、`[data-state="warning"]` 两个选择器 `querySelectorAll().length`，只判定存在性并计数）。状态机：`idle → working →(稳定 1.2s 空态)→ done-fired`；`任意 → waiting-fired`（waiting 出现立即上报，优先级覆盖 done）。等待用户 outranks 工作进行中（用户侧语义：需要拍板 > 继续观察）。注：隐藏页定时器被 Chrome 节流至 1Hz，取 1s 周期与节流上限对齐；端点快取在途（超时最长 1.5s > 1s 周期）时跳过重叠 tick。
+1. **检测（panel.js，只读；2026-08-24 数据源修订；2026-08-26 M12 再修订）**：与面板共注入（同一指纹激活）。**SSE 优先（2026-08-26 起）**：面板订阅同源 `EventSource('/_manager/events')`（§8.10 M12），事件到达即更新计数并走下述状态机/上报；**SSE 未存活时才回到「每 1s 取一次计数快照」**路径。快照路径**端点优先**：同源 `fetch('/_manager/sessions')`（1.5s 超时，失败静默；只读摘要元数据，与 §8.10 同口径，不读消息内容/文本）→ 统计 `items` 中 `state==='working'` / `state==='waiting'` 的数量；端点不可用（插件未装/旧版/网络失败）时**回退** DOM 扫描（`svg[data-state="ongoing"]`、`[data-state="warning"]` 两个选择器 `querySelectorAll().length`，只判定存在性并计数）。状态机：`idle → working →(稳定 1.2s 空态)→ done-fired`；`任意 → waiting-fired`（waiting 出现立即上报，优先级覆盖 done）。等待用户 outranks 工作进行中（用户侧语义：需要拍板 > 继续观察）。注：隐藏页定时器被 Chrome 节流至 1Hz，取 1s 周期与节流上限对齐；端点快取在途（超时最长 1.5s > 1s 周期）时跳过重叠 tick；SSE 事件驱动路径不存在该节流问题（事件即达）。
 2. **触发即上报（页面隐藏时；计数签名变化才发）**：仅在 `document.hidden === true`（标签不活跃或窗口最小化）时上报；`set`: `{type:'attention', op:'set', kind:'idle'|'working'|'waiting'|'done', counts:{working,waiting}}` → SW；**waiting:0→working:0 的计数签名（`waiting:working`）变化即上报**（蓝 n 常驻概览的数据源），`done` 为工作→空闲稳定 1.2s 的事件上报；SW 侧 `sender.tab.id` 为事实键（多个 dsh 标签页各记各的）。**页面重新可见即发 `op:'clear'`**（防「用户已在看却仍挂提醒」）。
 3. **SW 侧（background.js）**：`attentionMap`（storage.local，`{ [tabId]: {kind, working, waiting, at, port} }`）持久化——MV3 SW 可回收，徽标状态以 storage 为事实源；`tabs.onRemoved` 清理；**同标签导航离开 dsh（tab 未关闭）由 `tabs.onUpdated` 按 URL 判定清理（M8 修补 M2，content script 侧 pagehide 亦发 clear 双保险）**；`onStartup`/`onInstalled` 清空（浏览器重启/扩展更新后的旧提醒无意义，沿用占位即可）；4 小时 TTL 防僵尸键（兜底，不影响正常使用）。**同实例多标签去重（2026-08-24 修订）**：聚合前按条目 `port` 归并——同端口只保留 `at` 最新条目（idle 无信号条目不参与同端口竞争，保持「空=安静」语义）；无端口条目（外部/旧数据兼容）按 tab 独立参与。徽标渲染优先级：**waiting（黄「?」#f59e0b，M10.1 定稿）> done（绿「!」#22c55e，M10.1 定稿——原琥珀!随「完成」定稿改绿）> working（蓝 n #5686fe，n≥10 显示「9+」）**；文字色显式 `#ffffff`。**死提醒联动（M8.1 修补）**：refreshBadge 判定实例未运行/异常时，按条目 `port`（上报时从 tab.url 解析）清除对应端口的会话信号——此前「实例已停、黄?/绿! 仍挂 4h TTL」的误导场景。title 同步：等待/完成/工作三条文案 + 服务态（角标层）title。
 4. **设置**：`settings.attention`（默认 `true`，popup 设置面板「界面」分组开关「徽标提醒（回来看看）」）——关闭后 SW 忽略 set 且清空累积条目（`handleAttention` 的 set 分支以前置判断拒绝 + storage.onChanged 在开关变 off 瞬间清空 attentionMap），否则关闭期间的条目会在重开开关时冒出一条「凭空」提醒（H1 修补；M8.1 盲审补正：清理以**本次变化的权威值**为基——单次 set 同时改 settings+attentionMap 时 onChanged 回调内 settings 分支先于 attentionMap 分支、快照条目尚未入内存，旧实现会清理扑空，且 newValue 旧快照会把已删条目恢复回内存，已加 purged 防恢复）。`settings.attentionDone`（默认 `true`，「徽标：工作完成提醒（绿!）」独立开关）——已上表的 done 事件单独可关，waiting/working 不受影响；关闭瞬间同样剔除既有 done 条目（H1 对称修补），期间 done 也不会被新写入（set 分支前置拒绝）。
@@ -905,11 +909,12 @@ popup 设置面板新增「外观」行（四个互斥选项按钮），复刻 W
   - 会话清单：`ctx.sessions.list()`（live 会话，创建序）、`sessions.get(id)`、`sessions.flush(session)`（dsh-session 服务已核验）；
   - running：`ctx.get('agents')?.get(id)?.status === 'running'`——与 apiproxy `summarizeAttached` 同款判定；
   - title：fold 会话事件流中 `session/title` 事件（`events.findLast(e => e.type === 'session/title')?.data.title`，该事件由 session-title 服务 append，内容已归一化）；无标题事件 → 降级「会话 #<id 前 8>」。**不依赖 sessionTitle 服务本身**（事件流是唯一权威），避免服务缺挂时插件挂起；
-  - waiting：事件流判定——`approval/asked`（data.id）无匹配 `approval/decided`（apiproxy 1909-1918 同款回扫逻辑）→ 等待审批；或 `tool/call`（name=`ask_user_question`，dsh-tool-ask-user 工具）无匹配 `tool/result`（callId 配对）→ 等待问答。plan-review 是 question 子类型（`question/requested` 帧内 `questions[].intent.kind === 'plan-review'`，dsh-client-runtime 7783-7787 核验）——按 §8.10 契约 4 态无需细分，统一归 `waiting`；
+  - waiting：事件流判定——`approval/asked`（data.id）无匹配 `approval/decided`（apiproxy 1909-1918 同款回扫逻辑）→ 等待审批；或 `tool/call`（name=`ask_user_question`，dsh-tool-ask-user 工具）无匹配 `tool/result`（callId 配对）→ 等待问答（**M12.1 修订 2026-08-26：新增 `exit_plan_mode` 工具配对 → 等待计划审查**，见下）。
   - completed：events 含 `turn/end` 且非 running 非 pending（webui 侧为客户端 running 边沿推断，host 侧以 turn/end 存在性等价近似）；
   - idle：其余（blank / 无 turn/end）。
   - **范围决策**：v1 端点只返回 **live（attached）会话**——§8.10 验收 e2e 场景（start → 当前会话行 → 状态流转）即 live；冷会话（历史）状态恒为 completed/idle、title 需读持久化，价值低且增加读盘成本，留给后续增强。
   - **idle 实际存在性注记（2026-08-24 用户实机观察）**：新会话默认**不在** Web UI 会话列表；创建后才出现，但**若未发送任何内容就离开该会话，它不会存在**（不保留下落）。即"空壳会话"（blank）在 live 集合里实际不出现——idle 的典型场景进一步收窄为"已承载内容但从未完成过任意一轮"的边角情形（近零出现）；这也解释了用户"空闲没用"的直觉（Web UI 本体同样不分 idle/completed，统一 data-state=done）。倾向：若后续优化，以 popup 折叠/弱化 idle 为优先（不动契约）。
+  - **M12.1 补正（2026-08-26 用户实机反馈：计划待审显示为「进行中」而非「待确认」；本会话事件流实测）**：plan-review 的 Web UI 「计划待审」面板由**客户端帧**驱动——`dsh-plan-mode` 的 `exit_plan_mode` 工具执行体经 `ctx.userQuestions.ask({questions:[{intent.kind:'plan-review'}]})`（dsh-plan-mode L286-311）发出 `question/requested` **客户端 UI 帧**（dsh-client-runtime），**不进服务端 session 事件流**（本会话 31 种事件类型无 question 类，实证）；服务端唯一权威信号 = **`exit_plan_mode` 工具的 call↔result 配对**（提交计划即调用并阻塞等待，用户确认/拒绝后 result 才 append——实测时序 11:42:51 `tool/call` → 11:44:28 `tool/result`）。**修正**：`hasPendingInteraction` 工具配对白名单由 `ask_user_question` 扩为 `ask_user_question | exit_plan_mode`；**不可**用 `plan/mode {active:true}` 单独判等待（该事件从"模型正在写计划"阶段即 true，早于 wait 语义对应的 question/requested 帧时刻——双条件冗余且不如 call↔result 精确）。「拒绝/继续规划」路径 result（含错误）照常 append，闭合成非等待，语义与客户端 pendingInteraction 清除对齐。
 - **D1 决策（2026-08-23 定稿）**：扩展现有 `dsh-lifecycle` 包（同一安装/升级面、同一 cordis.patch.yml 挂载、单测/README 同源），不新建 `dsh-manager-sessions` 包。
 
 **端点契约（设计定稿）**：
@@ -939,6 +944,55 @@ GET /_manager/sessions          （dsh 配套插件，lifecycle 同款 allow() �
 **验证（§14 扩展）**：插件单测（端点响应/围栏/幂等 + ctx 服务 mock）；宿主 smoke 新场景（fake-dsh 增 `/_manager/sessions` 应答；`sessions` 动作参数与超时）；verify-cdp popup 断言（mock SW 应答 → 会话区渲染 + 状态圆点 + 降级提示 + 行点击）；真实 dsh 实例 e2e（§14.2 追加步骤：start → 会话区出现当前会话行 → 状态随会话流转）。
 
 **里程碑拆解**：M9.1 可行性 spike（临时 dsh 实例 + 探测插件打印 ctx 服务可用性与字段；确认 title/pendingInteraction 可读性）→ M9.2 插件端点 + 单测 + smoke → M9.3 host `sessions` + popup 会话区 + verify 断言 → M9.4 真实实例 e2e + §12.3 数据边界补充（会话元数据=只读摘要，不读消息体/凭据，范围不变）。
+
+---
+
+#### 8.10.1 M12 会话推送（SSE，2026-08-26 定稿）
+
+**动机**：M9 后所有消费面都靠轮询——popup 2s（native 往返：每次 spawn 宿主进程 + 状态探测 + 端点 1.5s 快取）、面板隐藏时 **1Hz/标签** 打 `/_manager/sessions`（贴着 Chrome 隐藏页节流上限）、徽标 30s alarms。会话状态切换（working→waiting approval、子代理 start/end、turn/end）的感知延迟 1s~30s 且空轮询消耗真实网络/进程开销。**目标**：状态变化由 dsh 宿主事件即时推送，0 延迟、0 空轮询。
+
+**事件源（0.1.1-rc.2 源码核验，见 §2 M12 注记）**：Cordis 事件总线——`session/created` / `session/event`（append 同步触发，种子不发射）/ `session/disposed` / `agent/status`（`{status, agent}`）。插件挂载于 app 层（untagged），按 dsh-scope `scopeTarget` 语义**接收全部作用域会话事件**（与官方 apiproxy 订阅模式同构）。
+
+**端点契约（设计定稿）**：
+
+```
+GET /_manager/events          （SSE；lifecycle 同款 allow() 围栏；只读；零依赖 Node http 原生写）
+200 → text/event-stream:
+  retry: 3000
+  id: 1
+  event: snapshot
+  data: {"ok":true,"items":[ <与 /_manager/sessions 完全同形> ]}     ← 连接即快照（重连=重拿快照，无 Last-Event-ID 回放）
+  ...
+  id: N
+  event: upsert
+  data: {"session":<summary 行>}                                      ← 语义变化才推
+  id: M
+  event: removed
+  data: {"sessionId":"session-xxx"}
+  : ping                                                             ← 15s 心跳
+403 → 围栏拒绝；405 → 非 GET；500 → sessions 服务不可用（与 GET /_manager/sessions 语义一致）
+```
+
+- **推送判定（防事件风暴）**：仅当 `state/title/blank/cwd/childRuns` **语义字段**变化才推送；**`updatedAt` 不参与 diff**（否则 `assistant/chunk` 每秒多次触发推送）。事件类型白名单：`approval/asked`、`approval/decided`、`tool/call`(name=`ask_user_question`)、`tool/result`、`turn/start`、`turn/end`、`subagent/start`、`subagent/end`、`session/title`；其余高频事件直接忽略。同会话 50ms 内多事件合并（debounce）。
+- **派生与口径**：复用 `buildItems()`（与 `/_manager/sessions` 共享：`summarizeSession` 四态判定、`foldTitle`、`activeChildIds` 子代理配对、`foldChildLabel` 标签折叠、`workspaceRegistry` 归档过滤——**归档且无活动子代理的会话在 upsert 时按 removed 处理**，与 GET 端点「不出现该行」同语义）。
+- **订阅生命周期**：`ctx.on(...)` disposer 纳入插件 dispose 数组；`connections` Set + `res.on('close')` 清理；写前守卫 `writableEnded/destroyed`；`connections.size===0` 时事件回调零重算；插件 dispose → `closeAllConnections()` 断流（webserver 既有行为）。
+- **已知局限（v1 接受）**：webui 中归档集合变更**不实时推送**（快照/重连时收敛；归档操作发生在 webui 页面，页面打开即重连）；`/api/events.host` 官方通道不复用（426 WebSocket-only + waiting 需 mux 帧=含消息内容，违反 §12.2；见 §2 M12 注记）。
+
+**消费路径（两级，均为合规路径）**：
+
+| 消费面 | 链路 | 延迟 | 降级 |
+|---|---|---|---|
+| 页面面板/徽标（一级，收益主体） | 面板（content script，**同源页面**）`EventSource('/_manager/events')` → 事件即更新计数 → 既有 `attention` 上报 SW → 徽标/面板 | <100ms | SSE 失败/插件缺失 → 1Hz 端点轮询 → DOM 扫描（现状路径不变） |
+| popup 会话区（二级） | 面板事件 → SW `sessions-sync`（按端口去重）→ `storage.local.sessionsCache`（防抖 100ms）→ popup `storage.onChanged` 即时渲染 | <500ms | 无 dsh 标签/镜像缺失 → native `sessions` 2s 轮询（现状，为正确性保底） |
+
+- **popup 不能直连**：`chrome-extension://` Origin 被 `allow()` 围栏拒绝（与 `/_manager/sessions` 相同）——镜像桥只经扩展内部 storage，**只存摘要 items（不读消息内容/文本，§12.2 边界不变）**；无宿主协议变更（§6.2 不动）、无新增权限。
+- **SW 只接受带 `sender.tab` 的回溯校验**（url 为 dsh 回环页）——与 `attention` 上报同款 L3 加固；`sessionsCache` 随实例失活清理（与死提醒联动同点）。
+
+**验证（§14 扩展）**：插件单测（快照/upsert/removed/diff 抑制/无关事件零帧/403/405/断连清理/dispose 断流/零连接零重算）；verify-cdp（Fetch 拦截扩展 `/_manager/events` 快速失败保持现有 mock 路径回归；新增 SSE 段——合成帧注入 → 徽标/面板 <1s 更新且无轮询网络请求）；真实实例 e2e（200+快照帧、状态流转 upsert、shutdown 断流）；人工（双标签后台 + approval → 徽标「?」<100ms）。
+
+**客户端接收要求（契约注记，2026-08-26 实机破案补记）**：本端点**所有数据帧均带 `event:` 头**（`snapshot` / `upsert` / `removed`）。按 WHATWG EventSource 规范，带 `event:` 头的帧派发为**命名事件**，**永不触发 `onmessage`**（`onmessage` 只收无 `event:` 头的默认 message 事件）——消费方必须 `addEventListener('snapshot'|'upsert'|'removed')` 按命名事件接收，不得只依赖 `onmessage`。
+实机教训（M12.2）：面板曾只挂 `onmessage` → `applySseFrame` 从未执行 → `sseMap` 恒空而 `sseAlive=true`（连接真实存在）→ 徽标全链路失效（working 蓝 n 与 waiting 黄? 均缺失）且永不回退 1Hz 端点轮询；popup 会话区因走 native `sessions` 2s 轮询（独立数据源）不受影响。verify 合成帧挂钩直接调 `applySseFrame` 绕过真实 EventSource 解析，此类「接收层」缺陷不会被 verify 暴露——**SSE 段验证须保留一路真实 EventSource 路径**（e2e/人工实测），不能只依赖合成帧注入。
+真实帧 `e.data` 为裸对象（snapshot→`{ok,items}`、upsert→`{session}`、removed→`{sessionId}`），接收端须包成 `{event, data}` 形状再进入既有 `applySseFrame`；建议以 `onmessage` 兜底防御无 `event:` 头的默认帧（当前插件不发，防御未来契约漂移）。帧格式实证见 `.sse-witness.log`（id 递增 + `event:` 头 + 状态切换 upsert）。**2026-08-26 实机复测闭环**：重载扩展 + 刷新页面后，提问等待弹窗切后台 30s → 工具栏黄「?」出现，接收修复生效。
 
 ---
 
@@ -1189,13 +1243,14 @@ dsh-manager/
 - 不调用 `/api`（Origin 围栏，F9）；探活只用 `GET /`。
 - 生命周期插件端点（§7）必须自我设限：仅回环连接 + Origin 缺失或同源，**绝不注册为公开 RPC**；「扩展 → 宿主 → HTTP」链路因宿主请求无 Origin 而天然合规，扩展直连则被拒。
 - 扩展 host_permissions 仅回环；不申请任何超出需求的权限。
-- **页面内面板（§8.6）**：content script 只注入 dsh 指纹页面（127.0.0.1/localhost 任意端口）；面板对页面的唯一写操作是追加自身 shadow 节点，不读取/修改页面 DOM 与数据；停止/重启经 SW → 宿主全套防护（PID 校验、外部实例保护、锁），面板不持有任何特权 API（无 `/_lifecycle` 直连、无宿主角色的独立判定）。**例外（M8，§8.9；2026-08-24 扩为端点摘要）**：徽标提醒段优先**同源只读** `GET /_manager/sessions`（§8.10 摘要元数据：sessionId/标题/四态/时间戳，**不读消息体/事件内容/凭据**；仅同源回环请求）；端点不可用时回退只读存在性扫描（`svg[data-state="ongoing"]` / `[data-state="warning"]` 两个语义属性是否存在），不采集消息文本/会话内容；上报 SW 仅为两值枚举 `done|waiting` + 计数。
+- **页面内面板（§8.6）**：content script 只注入 dsh 指纹页面（127.0.0.1/localhost 任意端口）；面板对页面的唯一写操作是追加自身 shadow 节点，不读取/修改页面 DOM 与数据；停止/重启经 SW → 宿主全套防护（PID 校验、外部实例保护、锁），面板不持有任何特权 API（无 `/_lifecycle` 直连、无宿主角色的独立判定）。**例外（M8，§8.9；2026-08-24 扩为端点摘要；2026-08-26 M12 扩为 SSE 事件流）**：徽标提醒段优先**同源只读** `GET /_manager/sessions`（§8.10 摘要元数据：sessionId/标题/四态/时间戳，**不读消息体/事件内容/凭据**；仅同源回环请求）；M12 起同级**同源只读** `GET /_manager/events`（SSE，§8.10.1：snapshot/upsert/removed 帧**仅携带与 `/_manager/sessions` 完全同构的摘要元数据**，无任何消息内容/文本）为优先数据源、端点快照为其回退；端点不可用时回退只读存在性扫描（`svg[data-state="ongoing"]` / `[data-state="warning"]` 两个语义属性是否存在），不采集消息文本/会话内容；上报 SW 仅为两值枚举 `done|waiting` + 计数（M12 起增加 `sessions-sync` 摘要 items 镜像——仍为 §8.10 同构摘要，扩展内部 storage 中转，popup 侧经 `storage.onChanged` 消费；popup/SW 直连端点仍被 Origin 围栏拒绝，不构成例外扩大）。
 
 ### 12.3 数据与凭据
 
 - 扩展不读取、不存储 `$DSH_HOME` 下的凭据文件（`.credentials.yaml`）；状态展示仅含 pid/端口/时长/版本/健康字段。
 - run 记录与日志落在 `%LOCALAPPDATA%`，仅本用户可读；日志中可能出现工作区路径，属于本机用户自身信息。
 - **M9 会话元数据边界（2026-08-23）**：`/_manager/sessions` 端点只出**只读摘要元数据**（sessionId/title/state/updatedAt/blank/cwd）——title 取自 `session/title` 事件（已归一化），state 由事件流判定（`approval/asked`↔`decided`、`tool/call`(ask_user_question)↔`tool/result` 配对）；**不读消息体/事件内容/凭据**；扩展侧渲染仅用摘要，行点击只打开 Web UI 首页。§12.2 的「不调用 /api、不读页面内容」范围不变。
+- **M12 推送边界（2026-08-26）**：`/_manager/events`（SSE）帧与 `/_manager/sessions` 完全同构（同上摘要字段，无消息内容/文本）；popup 镜像桥（`storage.local.sessionsCache`）只存该摘要 items（≤50 条/端口），**不存储/转发事件正文、工具结果、附件、凭据**；插件侧事件订阅仅用于派生摘要状态（`summarizeSession` 同款判定），任何事件内容都不进入推送/存储面。
 
 ---
 
@@ -1293,6 +1348,7 @@ M7 状态卡断言、M8 徽标提醒分层渲染（done/waiting/清空恢复）�
 | **M9 扩展面板会话状态**（§8.10，路径 3） | dsh 配套插件新增只读端点 `/_manager/sessions`（lifecycle 同款围栏）→ 宿主 `sessions` 动作 → popup「会话」区（标题 + 状态圆点色表，只读不读内容）；降级提示 | **完成（2026-08-23）**：M9.1 spike（signal 全部 host 侧可读）→ M9.2 插件端点 + 单测 29/29 → M9.3 宿主 `sessions` action + popup 会话区 + smoke 356/0 + verify-cdp 82/0 → M9.4 真实实例 e2e 7/7（真实 dsh 0.1.1-rc.2 + 真实 profile 插件装配：端点 200/403/405、available:true、优雅停机无回归；本机插件已升级） |
 | **M10 颜色语义自定义**（§8.12；M10.1 定稿 2026-08-24） | 用户可按语义角色调整展示色（如「完成」琥珀→绿）：`waiting/working/completed` 三角色预设色板，`settings.colorMap` 全域生效（popup 会话区走语义 CSS 变量、徽标 SW 读 storage）；error 红与字符语义锁定；**定稿色板：进行中=webui 蓝 #5686fe、等待=琥珀黄 #f59e0b、完成=绿 #22c55e**（去 idle、done 并入完成色；徽标完成提醒「!」随定稿改绿）；**顺带统一 working 双载体默认色** | 验收：verify-cdp 改色/恢复默认/撞色提示断言 + 字符语义不回归（**已完成 2026-08-24**） |
 | **M11 项目更名**（§15.1，规划） | 一期：显示品牌（manifest 名、README、popup 品牌名、GitHub 仓库名）；二期：全量更名（native host 协议名 `com.dsh.manager`、注册表键、`%LOCALAPPDATA%\dsh-manager` 状态目录、`DSH_MANAGER_*` 测试钩子、代码/文档标识，含迁移脚本与卸载兼容）；**Chrome Web Store 上架前必须完成**（商店品牌一致性 + 图标重审准备） | 命名拍板（GitHub/npm/商店名冲突核查）→ 一期 → 二期迁移演练；§15.1 |
+| **M12 会话推送（SSE）**（§8.10.1，2026-08-26） | 插件新增 `GET /_manager/events`（SSE：连接即快照 + 语义 diff 增量 upsert/removed + 15s 心跳；事件驱动 `session/event|created|disposed` + `agent/status`；零新依赖）→ 面板 `EventSource` 同源直连（徽标/面板 <100ms，SSE 存活时消除 1Hz 空轮询）→ popup storage 镜像桥（`sessionsCache` + `storage.onChanged`，<500ms）；故障三级回退（SSE → 1Hz 端点 → DOM）；无宿主协议/权限变更 | 插件单测（33→~45）+ `node --check`；verify-cdp 既有断言回归 + SSE 段（合成帧 → 徽标/面板即时更新且无轮询请求）；宿主 smoke 356/0 回归；真实实例 e2e（SSE 200/快照帧/状态流转/断流）；人工：双标签后台 + approval → 徽标「?」<100ms。**M12.1（2026-08-26）plan-review 判定补正**（§8.10 注记：`exit_plan_mode` 工具配对 → waiting）+ 单测 50/50 |
 
 ### 15.1 项目命名与更名规划（M11，2026-08-23 用户提出「名字太朴实」）
 

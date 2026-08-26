@@ -54,6 +54,7 @@ const DSH_COLORS_DEFAULT = {
 // SW → 徽标）；provider 为 null 时原请求放行。仅 verify 测试期使用。
 let sessionsMockProvider = null;
 let sessionsMockHits = 0; // 诊断：Fetch 拦截命中次数（断言 mock 确实驱动了链路）
+let pageCtxInfos = [];    // 页面执行上下文清单（M12：定位 content script 隔离世界）
 
 async function fulfillSessionsMock(page, requestId) {
   if (!sessionsMockProvider) {
@@ -153,7 +154,9 @@ async function main() {
     '--user-data-dir=' + PROFILE,
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-gpu',
+    '--ignore-gpu-blocklist',
+    '--enable-gpu-rasterization',
+    '--enable-zero-copy',
     '--window-size=1280,900',
     '--enable-unsafe-extension-debugging', // 新版 Chrome 可能已无需此旗标，传了也无害
     'about:blank',
@@ -181,7 +184,9 @@ async function main() {
   const tab = await fetchJson('http://127.0.0.1:' + PORT + '/json/new?about:blank', { method: 'PUT' });
   const consoleErrors = [];
   const page = await connectWs(tab.webSocketDebuggerUrl, (m) => {
-    if (m.method === 'Runtime.exceptionThrown') {
+    if (m.method === 'Runtime.executionContextCreated') {
+      pageCtxInfos.push(m.params && m.params.context);
+    } else if (m.method === 'Runtime.exceptionThrown') {
       const d = m.params && m.params.exceptionDetails;
       consoleErrors.push('exception: ' + (d && d.text || JSON.stringify(d)).slice(0, 400));
     } else if (m.method === 'Runtime.consoleAPICalled' && m.params && m.params.type === 'error') {
@@ -190,7 +195,12 @@ async function main() {
     } else if (m.method === 'Fetch.requestPaused') {
       const reqId = m.params && m.params.requestId;
       const url = (m.params && m.params.request && m.params.request.url) || '';
-      if (reqId && /\/_manager\/sessions$/.test(url)) {
+      if (reqId && /\/_manager\/events$/.test(url)) {
+        // M12：verify 环境禁真 SSE 流（事件流无法 mock 为确定性流）——快速失败 →
+        // 面板自动回退端点 mock 路径（既有断言基线不变）；SSE 帧处理路径由 8c 段的
+        // 合成帧注入（页面 → content script DOM 事件挂钩）确定性驱动。
+        page.send('Fetch.failRequest', { requestId: reqId, errorReason: 'ConnectionFailed' }).catch(() => { });
+      } else if (reqId && /\/_manager\/sessions$/.test(url)) {
         fulfillSessionsMock(page, reqId);
       } else if (reqId) {
         page.send('Fetch.continueRequest', { requestId: reqId }).catch(() => { });
@@ -833,6 +843,299 @@ async function main() {
     recInfo.injected === true && /运行中/.test(recInfo.status || '') && recInfo.dot === 'dot dot-running',
     JSON.stringify(recInfo));
 
+  // 8c) M12 SSE 会话推送（design §8.10.1，2026-08-26）：页面主世界派发合成帧 →
+  //      content script DOM 事件挂钩（__whalekeeper_sse_frame）→ 真实「帧处理 →
+  //      状态机 → SW → 徽标」链路；alive:true 模拟 SSE 健康 → 断言 attTick 不再
+  //      打 /_manager/sessions（0 轮询）。真实 EventSource 连接/帧接收路径由下方
+  //      8d 段覆盖（M12.2 复盘：8c 合成帧挂钩恰好绕过真实 EventSource 解析，
+  //      101/0 全绿掩盖接收层缺陷——须单独保一路真实路径防回归）。
+  log('M12 SSE 会话推送（合成帧 → 徽标即时更新 + 0 轮询断言）');
+  {
+    const swTargetM12 = (await fetchJson('http://127.0.0.1:' + PORT + '/json/list'))
+      .find((t) => t.type === 'service_worker' && (t.url || '').includes(extId));
+    if (!swTargetM12) {
+      record('M12：SSE（扩展 SW 目标）', false, '未找到扩展 service worker target');
+    } else {
+      try {
+        const swM12 = await connectWs(swTargetM12.webSocketDebuggerUrl);
+        await swM12.send('Runtime.enable');
+        const swEvalM12 = async (expr) => {
+          const r = await swM12.send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
+          return { value: r && r.result ? r.result.value : undefined, raw: JSON.stringify(r).slice(0, 300) };
+        };
+        const waitForM12 = async (fn, timeoutMs) => {
+          const deadline = Date.now() + timeoutMs;
+          for (;;) {
+            if (await fn()) return true;
+            if (Date.now() >= deadline) return false;
+            await sleep(400);
+          }
+        };
+        const attKindsM12 = () => swEvalM12(`(async () => JSON.stringify(
+          Object.values((await chrome.storage.local.get({ attentionMap: {} })).attentionMap || {}).map((e) => e.kind)
+        ))()`).then((j) => {
+          try { return JSON.parse(String(j.value || '')); } catch (_) { return []; }
+        });
+        const badgeTextM12 = () => swEvalM12('chrome.action.getBadgeText({})').then((j) => String(j.value === undefined ? '' : j.value));
+        // 在 content script 的**隔离世界**直接派发（与面板同世界，DOM 事件必然可达——
+        // 主世界派发的 CustomEvent 不会进入隔离世界监听器，2026-08-26 实测）。
+        // 挂钩本身即声明「模拟 SSE 流存活」（panel.js __whalekeeper_sse_frame 语义）。
+        const dispatchSseFrame = async (frame) => {
+          const expr = `(() => {
+            let err = null;
+            try {
+              // 注意：面板监听器挂在 document（capture）——window.dispatchEvent 的传播
+              // 路径不经过 document，必须 document.dispatchEvent（2026-08-26 实测破案）。
+              document.dispatchEvent(new CustomEvent('__whalekeeper_sse_frame', { detail: { __whalekeeper: true, frame: ${JSON.stringify(frame)} } }));
+            } catch (e) { err = String(e && e.stack || e); }
+            return JSON.stringify({ err: err, injected: typeof window.__dshManagerPanelInjected, alive: document.documentElement.getAttribute('data-dshm-sse-alive') });
+          })()`;
+          const defaultCtxs = pageCtxInfos.filter((c) => c && c.auxData && c.auxData.isDefault === true);
+          const mainFrameId = defaultCtxs.length > 0 ? defaultCtxs[defaultCtxs.length - 1].auxData.frameId : undefined;
+          const candidates = [...pageCtxInfos].reverse().filter((c) => c && c.auxData && c.auxData.isDefault === false && c.auxData.frameId === mainFrameId);
+          for (const c of candidates) {
+            try {
+              const r = await page.send('Runtime.evaluate', { expression: expr, contextId: c.id, returnByValue: true });
+              log('M12 dispatch isolated ctx id=' + c.id + ' name=' + (c.name || '?') + ' -> ' + JSON.stringify(r && r.result && r.result.value));
+              return r && r.result && r.result.value;
+            } catch (_) { /* 该上下文已销毁/不可用：尝试下一个 */ }
+          }
+          log('M12 dispatch FAILED: no usable isolated ctx (total=' + pageCtxInfos.length + ' nonDefault=' + candidates.length + ')');
+          return null;
+        };
+        const pageHiddenM12 = () => page.send('Runtime.evaluate', {
+          expression: 'JSON.stringify({ hidden: document.hidden, injected: !!document.getElementById("dsh-manager-panel-host") })',
+          returnByValue: true,
+        }).then((r) => {
+          try { const j = JSON.parse(String(r.result.value)); return j.hidden === true; } catch (_) { return false; }
+        });
+
+        // 清场：M8 e2e 可能遗留第二个 dsh 标签（其面板有真实端点轮询，会与合成帧断言竞态）
+        const allTargets = await fetchJson('http://127.0.0.1:' + PORT + '/json/list');
+        for (const t of allTargets) {
+          if (!t || t.id === tab.id) continue;
+          if ((t.url || '').startsWith(dshUrl) || (t.url || '').startsWith(dshUrl.replace(/\/$/, ''))) {
+            await fetchJson('http://127.0.0.1:' + PORT + '/json/close/' + t.id, { method: 'PUT' }).catch(() => { });
+          }
+        }
+        // 清基线（attentionMap/设置复位）
+        await swEvalM12(`(async () => {
+          await chrome.storage.local.set({ attentionMap: {}, settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, attention: true, attentionDone: true, theme: 'follow-webui' } });
+          return 'reset';
+        })()`);
+        // 面板转后台（徽标上报前置条件）+ 端点 mock 计数窗口（0 轮询证据）
+        const tabBgM12 = await fetchJson('http://127.0.0.1:' + PORT + '/json/new?about:blank', { method: 'PUT' });
+        await browserWs.send('Target.activateTarget', { targetId: tabBgM12.id });
+        const hiddenOk = await waitForM12(pageHiddenM12, 6000);
+        await page.send('Fetch.enable', { patterns: [{ urlPattern: '*_manager/sessions', requestStage: 'Request' }] });
+        sessionsMockProvider = () => []; // 命中即计数：idle 基线（attTick 若轮询即被计入）
+        await sleep(1600); // 让快照前的任何端点轮询（alive 尚未置位）先落地，避免与断言竞态
+
+        // 1) 快照：1 个进行中 → 蓝 1 徽标即时上报（alive 模拟 SSE 健康）
+        await dispatchSseFrame({ event: 'snapshot', data: { ok: true, items: [
+          { sessionId: 'm12-w', state: 'working', updatedAt: 1700000000000 },
+        ] } });
+        const w1Att = await waitForM12(async () => (await attKindsM12()).includes('working'), 6000);
+        const w1Badge = await waitForM12(async () => (await badgeTextM12()) === '1', 4000);
+        const b1 = await badgeTextM12();
+        // 诊断：alive 挂钩是否执行（DOM 标记）+ EventSource 请求时间线
+        const diag = await page.send('Runtime.evaluate', {
+          expression: `(() => JSON.stringify({
+            aliveAttr: document.documentElement.getAttribute('data-dshm-sse-alive'),
+            hidden: document.hidden,
+            es: performance.getEntriesByType('resource')
+              .filter((en) => /\\/_manager\\/events/.test(en.name))
+              .map((en) => ({ t: Math.round(en.startTime), d: Math.round(en.duration) })),
+          }))()`,
+          returnByValue: true,
+        });
+        const diagStr = diag && diag.result ? String(diag.result.value) : 'n/a';
+        record('M12：合成快照（1 working，alive）→ 徽标「1」即时上报',
+          hiddenOk && w1Att && w1Badge,
+          'hidden=' + hiddenOk + ' badge=' + b1 + ' kinds=' + JSON.stringify(await attKindsM12()) + ' diag=' + diagStr);
+
+        // 2) 0 轮询：SSE alive 窗口内 attTick 不打端点（2.5s ≈ 2-3 个 1Hz tick）
+        const hitsBefore = sessionsMockHits;
+        await sleep(2500);
+        const hitsAfter = sessionsMockHits;
+        record('M12：SSE 活跃期间 0 端点轮询（2.5s 窗口无 /_manager/sessions 请求）',
+          hitsAfter === hitsBefore, 'hits ' + hitsBefore + '→' + hitsAfter);
+
+        // 3) upsert：等待 → 徽标「?」即时切换（优先级覆盖进行中）
+        await dispatchSseFrame({ event: 'upsert', data: { session: {
+          sessionId: 'm12-w', state: 'waiting', updatedAt: 1700000001000,
+        } } });
+        const w2Att = await waitForM12(async () => (await attKindsM12()).includes('waiting'), 4000);
+        const w2Badge = await waitForM12(async () => (await badgeTextM12()) === '?', 4000);
+        record('M12：upsert waiting → 徽标「?」即时切换',
+          w2Att && w2Badge, 'badge=' + await badgeTextM12() + ' kinds=' + JSON.stringify(await attKindsM12()));
+
+        // 4) removed + 快照清空 → 计数回落（状态机走 idle 上报，徽标清空；
+        //    attentionMap 保留 idle 条目属设计行为——隐蔽时不删条目，只清徽标）
+        await dispatchSseFrame({ event: 'removed', data: { sessionId: 'm12-w' } });
+        await dispatchSseFrame({ event: 'snapshot', data: { ok: true, items: [] } });
+        const cleared = await waitForM12(async () => (await badgeTextM12()) === '', 6000);
+        record('M12：removed/清空快照 → 徽标恢复安静',
+          cleared, 'badge=' + JSON.stringify(await badgeTextM12()) + ' kinds=' + JSON.stringify(await attKindsM12()));
+
+        // 5) 时序回归（2026-08-26 用户实测暴露）：「可见期帧到达 → 后切后台」——
+        //    面板在可见期只记账不 attApply（用户在看，无需提醒）；切后台的瞬间必须由
+        //    attTick 用内存计数补推一次状态机，否则徽标永远错过 waiting 上报（popup
+        //    已见「待确认」、徽标不黄的实测现象）。
+        await browserWs.send('Target.activateTarget', { targetId: tab.id }); // 切回 dsh 页（可见）
+        await waitForM12(async () => {
+          const h = await page.send('Runtime.evaluate', {
+            expression: 'document.hidden',
+            returnByValue: true,
+          });
+          return h && h.result && h.result.value === false;
+        }, 6000);
+        await dispatchSseFrame({ event: 'snapshot', data: { ok: true, items: [
+          { sessionId: 'm12-seq', state: 'working', updatedAt: 1700000000000 },
+        ] } });
+        await dispatchSseFrame({ event: 'upsert', data: { session: {
+          sessionId: 'm12-seq', state: 'waiting', updatedAt: 1700000001000,
+        } } });
+        // 可见期：不上报（状态机未推进）
+        const visibleQuiet = !(await attKindsM12()).includes('waiting');
+        const badgeBeforeSeq = await badgeTextM12();
+        // 切后台（visibilitychange → attTick 立即补推）
+        await browserWs.send('Target.activateTarget', { targetId: tabBgM12.id });
+        const seqOk = await waitForM12(async () => (await badgeTextM12()) === '?', 5000);
+        record('M12：可见期帧到达 → 切后台 → 徽标补推「?」（时序回归：先发帧后切后台）',
+          visibleQuiet && seqOk,
+          'visibleQuiet=' + visibleQuiet + ' badgeBefore=' + JSON.stringify(badgeBeforeSeq) + ' badgeAfter=' + await badgeTextM12());
+
+        // 清理：mock/Fetch/辅助标签/回到 dsh 页 + 清镜像与提醒残留（防污染后续测试段）
+        sessionsMockProvider = null;
+        await page.send('Fetch.disable');
+        await swEvalM12(`(async () => {
+          await chrome.storage.local.set({ sessionsCache: {}, attentionMap: {} });
+          return 'cleared';
+        })()`);
+        await fetchJson('http://127.0.0.1:' + PORT + '/json/close/' + tabBgM12.id, { method: 'PUT' }).catch(() => { });
+        await browserWs.send('Target.activateTarget', { targetId: tab.id });
+      } catch (eM12) {
+        record('M12：SSE 会话推送', false, 'e2e 异常: ' + (eM12 && eM12.message ? eM12.message : String(eM12)));
+      }
+    }
+  }
+
+  // 8d) M12.2 真实 EventSource 路径回归（design §8.10.1「客户端接收要求」，
+  //     2026-08-26）：M12.2 破案复盘——徽标长期缺失的根因是面板只挂 onmessage、
+  //     收不到插件帧的 `event:` 命名事件（snapshot/upsert/removed 永不触发
+  //     onmessage），而 8c 的合成帧挂钩恰好绕过真实 EventSource 解析（101/0
+  //     全绿掩盖接收层缺陷）。本段保留一路真实路径：插件端点可达时开新标签页连
+  //     真实 /_manager/events，以面板 data-dshm-sse-alive（真实 onopen 探针）+
+  //     data-dshm-sse-count（真实帧进入 applySseFrame/sseMap 探针，属性只在
+  //     applySseFrame 内写入）双证据断言；端点不可达（被验实例未装 M12 插件）→
+  //     SKIP（环境依赖，不 FAIL，与 M8 e2e 降级思路一致）。
+  log('M12：真实 EventSource 连接 + 真实帧解析（防 M12.2 接收层回归）');
+  {
+    const http = require('http');
+    const sseEndpoint = dshUrl.replace(/\/+$/, '') + '/_manager/events';
+    // Node 侧探测：插件端点连接即发 snapshot 帧（fetch 会挂长连接不返回，须用
+    // http.get + 短读窗口——读到 event: 行即销毁，3s 超时判定不可达）
+    let sseReachable = false;
+    let probeDiag = '';
+    await new Promise((resolve) => {
+      const req = http.get(sseEndpoint, { timeout: 3000 }, (res) => {
+        probeDiag += 'status=' + res.statusCode;
+        if (res.statusCode !== 200) { req.destroy(); resolve(); return; }
+        let buf = '';
+        res.on('data', (chunk) => {
+          buf += chunk.toString();
+          if (/^event: |\nevent: |\r\nevent: /.test(buf)) {
+            sseReachable = true;
+            probeDiag += ' head=' + JSON.stringify(buf.split(/\r?\n/).slice(0, 3).join('|'));
+            req.destroy();
+            resolve();
+          }
+        });
+        res.on('end', () => { if (buf) probeDiag += ' eof bytes=' + buf.length; resolve(); });
+        res.on('error', (e) => { probeDiag += ' resErr=' + (e && e.code); resolve(); });
+      });
+      req.on('timeout', () => { probeDiag += ' timeout'; req.destroy(); resolve(); });
+      req.on('error', (e) => { probeDiag += ' reqErr=' + (e && e.code); resolve(); });
+    });
+    if (!sseReachable) {
+      record('M12：真实 EventSource 路径', true,
+        'SKIP——插件端点 ' + sseEndpoint + ' 不可达（' + (probeDiag || '无响应') + '），环境依赖');
+    } else {
+      let pageSse = null;
+      let tabSse = null;
+      try {
+        // 新标签页（本页不挂 Fetch 拦截 → 面板走真实端点）；显式激活避免后台 tab
+        // 对 EventSource/timer 的节流，与 8c 的 tabBgM12 激活同款
+        tabSse = await fetchJson('http://127.0.0.1:' + PORT + '/json/new?about:blank', { method: 'PUT' });
+        await browserWs.send('Target.activateTarget', { targetId: tabSse.id });
+        pageSse = await connectWs(tabSse.webSocketDebuggerUrl);
+        await pageSse.send('Page.enable');
+        await pageSse.send('Runtime.enable');
+        await pageSse.send('Page.navigate', { url: dshUrl });
+        // 轮询断言：面板注入 + 真实连接探针 + 真实帧探针。count 属性只在
+        // applySseFrame 内写入——属性存在即真实帧已解析（空闲实例空快照时值为
+        // '0'，故按「存在」而非「≥1」判定，防空闲实例误报）
+        let ok8d = false;
+        let diag8d = 'timeout';
+        const deadline = Date.now() + 20000;
+        for (;;) {
+          let j = null;
+          try {
+            const r = await pageSse.send('Runtime.evaluate', {
+              expression: `(() => {
+                const el = document.getElementById('dsh-manager-panel-host');
+                const root = document.documentElement;
+                return JSON.stringify({
+                  injected: !!el,
+                  alive: root.getAttribute('data-dshm-sse-alive'),
+                  count: root.getAttribute('data-dshm-sse-count'),
+                  hidden: document.hidden,
+                });
+              })()`,
+              returnByValue: true,
+            });
+            j = r && r.result ? JSON.parse(String(r.result.value)) : null;
+          } catch (_) { /* 导航期上下文销毁：继续轮询 */ }
+          if (j && j.injected === true && j.alive === '1' && j.count !== null) {
+            ok8d = true;
+            diag8d = JSON.stringify(j);
+            break;
+          }
+          if (Date.now() >= deadline) { diag8d = JSON.stringify(j); break; }
+          await sleep(500);
+        }
+        record('M12：真实 EventSource 连接 + 真实 SSE 帧解析（面板 data-dshm-sse-* 双探针）',
+          ok8d, 'diag=' + diag8d + ' probe=' + probeDiag);
+      } catch (e8d) {
+        record('M12：真实 EventSource 路径', false, '8d 异常: ' + (e8d && e8d.message ? e8d.message : String(e8d)));
+      } finally {
+        // 清理：断 WS → 关新标签页 → 显式激活原 dsh 页（防其后台面板残留上报）
+        if (pageSse) { try { pageSse.ws.close(); } catch (_) { /* 忽略 */ } }
+        if (tabSse) {
+          await fetchJson('http://127.0.0.1:' + PORT + '/json/close/' + tabSse.id, { method: 'PUT' }).catch(() => { });
+        }
+        try { await browserWs.send('Target.activateTarget', { targetId: tab.id }); } catch (_) { /* 忽略 */ }
+        // 原页面可见后 ~1s 内 attTick 会自动 clear；再经 SW 清一次提醒/镜像，
+        // 确定性防污染后续测试段（8c 清理同款）
+        await sleep(1500);
+        try {
+          const swClean = (await fetchJson('http://127.0.0.1:' + PORT + '/json/list'))
+            .find((t) => t.type === 'service_worker' && (t.url || '').includes(extId));
+          if (swClean) {
+            const wsClean = await connectWs(swClean.webSocketDebuggerUrl);
+            await wsClean.send('Runtime.enable');
+            await wsClean.send('Runtime.evaluate', {
+              expression: `(async () => { await chrome.storage.local.set({ sessionsCache: {}, attentionMap: {} }); return 'cleared'; })()`,
+              awaitPromise: true, returnByValue: true,
+            });
+            wsClean.ws.close();
+          }
+        } catch (_) { /* 清理尽力而为 */ }
+      }
+    }
+  }
+
   // 9) 日志页交互（安全只读）：点「加载更早」（真实日志 < 500 行 → toast 已到开头）
   //    与「复制全部」（toast 显示行数）——验证按钮/toast 链路，不触碰生命周期。
   log('日志页交互（加载更早 / 复制全部）');
@@ -1223,11 +1526,13 @@ async function main() {
     JSON.stringify(v.running));
   record('M7：external 状态词「外部实例」+ 蓝点',
     okv(v.external) && v.external.word === '外部实例' && v.external.dot === 'dot dot-external', JSON.stringify(v.external));
-  record('M7：starting 状态词「正在启动…」+ 琥珀状态词',
-    okv(v.starting) && v.starting.word === '正在启动…' && v.starting.dot === 'dot dot-busy',
+  record('M7：starting 状态词「正在启动…」+ 琥珀 busy 脉冲',
+    okv(v.starting) && v.starting.word === '正在启动…' && v.starting.dot === 'dot dot-busy'
+      && v.starting.breathe === 'dsh-dot-pulse',
     JSON.stringify(v.starting));
-  record('M7：stopping 状态词「正在停止…」',
-    okv(v.stopping) && v.stopping.word === '正在停止…' && v.stopping.dot === 'dot dot-busy',
+  record('M7：stopping 状态词「正在停止…」+ 琥珀 busy 脉冲',
+    okv(v.stopping) && v.stopping.word === '正在停止…' && v.stopping.dot === 'dot dot-busy'
+      && v.stopping.breathe === 'dsh-dot-pulse',
     JSON.stringify(v.stopping));
   record('M7：error 红调卡（.error + 红边框 + 红状态词）',
     okv(v.error) && /\berror\b/.test(v.error.cls)
