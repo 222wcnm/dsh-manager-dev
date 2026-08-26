@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================================
-// smoke.js — DSH Manager 宿主冒烟测试（native-host/test/）
+// smoke.js — Whalekeeper 宿主冒烟测试（native-host/test/）
 //
 // 运行方式（沙箱内，文件传输模式，无管道捕获）：
 //   node native-host/test/smoke.js
@@ -1194,7 +1194,7 @@ async function scenarioSessions() {
 // 主流程
 // ---------------------------------------------------------------------------
 async function main() {
-  console.log('=== DSH Manager 宿主冒烟测试 ===');
+  console.log('=== Whalekeeper 宿主冒烟测试 ===');
   console.log('root  =', ROOT);
   console.log('base  =', BASE);
   console.log('stub  =', FAKE_DSH);

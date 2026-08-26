@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================================
-// DSH Manager —— Native Messaging 宿主（Windows）
+// Whalekeeper —— Native Messaging 宿主（Windows）
 // 通过浏览器扩展（Chrome/Edge）管理 DeepSeek Harness（dsh）web 服务的生命周期：
 //   ping / status / start / stop / restart / adopt / logs
 // 单文件、纯 Node CJS、零第三方依赖、Node >= 18。
@@ -1071,7 +1071,7 @@ function getDshVersion(bin) {
 // 载体（wscript→cmd）即刻退出，dsh 独立存活；真实 PID 由 startDshCore 在端口
 // 就绪后经端口表反查（findPidByPort），不以 wscript 的 pid 为准。
 const VBS_LAUNCH_SOURCE = [
-  "' DSH Manager: launch dsh with a hidden console (design §6.3 M5.5)",
+  "' Whalekeeper: launch dsh with a hidden console (design §6.3 M5.5)",
   "' Usage: wscript.exe launch-hidden.vbs  (command line via env DSH_MANAGER_LAUNCH_CMD)",
   "' windowStyle=0 (SW_HIDE): the console window is created but never shown -",
   "' dsh keeps a console (its children inherit it, no flash windows) while the",

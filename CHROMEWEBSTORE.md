@@ -1,4 +1,4 @@
-# Chrome Web Store Listing — DSH Manager
+# Chrome Web Store Listing — Whalekeeper
 
 > Last Updated: 2026-08-22
 > 本文档是 Chrome Web Store 上架信息与发布就绪度的唯一事实源（chrome-extensions 技能约定）。
@@ -8,15 +8,15 @@
 
 **Extension Name** [REQUIRED]
 
-DSH Manager
+Whalekeeper
 
 **Short Description** [REQUIRED]（≤132 字符）
 
-一键管理本机 DeepSeek Harness (dsh) Web 服务：启动、停止、重启、状态监控与日志查看，全程无需打开终端。
+Whalekeeper — 一键管理本机 DeepSeek Harness (dsh) Web 服务：启动、停止、重启、状态监控与日志查看，全程无需打开终端。
 
 **Detailed Description** [REQUIRED]
 
-一键管理本机 DeepSeek Harness (dsh) Web 服务，无需打开终端。
+Whalekeeper — 一键管理本机 DeepSeek Harness (dsh) Web 服务，无需打开终端。
 
 主要功能：
 

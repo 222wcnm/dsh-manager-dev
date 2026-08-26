@@ -8,7 +8,8 @@
 //   3. 依次切换 概览 / 会话 / 设置 三视图 + 深色概览，各存一张 2x 高清 PNG
 // 用法： node tools/ui-theme/capture-readme-shots.js
 // 前置： headless Chrome 需全权限（同 verify-cdp；受限沙箱拦截 mojo 管道 0x5）
-// 产物： docs/images/popup-{dashboard,sessions,settings}-light.png + popup-dashboard-dark.png
+// 产物： docs/images/popup-{dashboard,sessions}-light.png + popup-settings-{top,bottom}-light.png
+//        （设置区分上下两屏——内容纵向较长，拆两张并排展示避免长图）+ popup-dashboard-dark.png
 // ============================================================================
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -149,13 +150,21 @@ async function main() {
   await sleep(500);
   await shot('popup-sessions-light.png');
 
-  // 3) 浅色：首选项设置（滚动到底部——颜色角色/会话感知/保存操作栏）
+  // 3) 浅色：首选项设置——上/下两屏（纵向内容长，拆两张并排展示，避免长图）
+  //    上屏：scrollTop=0（服务运行环境 + 徽标与外观）
   await page.send('Runtime.evaluate', {
-    expression: 'switchV6("sett"); renderSettingsForm(); const p = document.getElementById("v6-p-sett"); if (p) p.scrollTop = p.scrollHeight;',
+    expression: 'switchV6("sett"); renderSettingsForm(); const p1 = document.getElementById("v6-p-sett"); if (p1) p1.scrollTop = 0;',
     returnByValue: true,
   });
   await sleep(500);
-  await shot('popup-settings-light.png');
+  await shot('popup-settings-top-light.png');
+  //    下屏：scrollTop=底部（扩展徽标与会话颜色 + 会话感知 + 保存操作栏）
+  await page.send('Runtime.evaluate', {
+    expression: 'const p2 = document.getElementById("v6-p-sett"); if (p2) p2.scrollTop = p2.scrollHeight;',
+    returnByValue: true,
+  });
+  await sleep(500);
+  await shot('popup-settings-bottom-light.png');
 
   // 4) 深色：服务概览（V6 深色令牌走 body[data-ds-dark-theme] 渲染标记，与 webui 同规范）
   await page.send('Runtime.evaluate', {

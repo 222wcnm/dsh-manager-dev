@@ -1,10 +1,10 @@
 # 贡献指南（CONTRIBUTING）
 
-感谢关注 DSH Manager！本文帮助新贡献者了解项目、搭建环境并安全地提交改动。
+感谢关注 Whalekeeper！本文帮助新贡献者了解项目、搭建环境并安全地提交改动。
 
 ## 项目是什么
 
-DSH Manager 是一个 Chrome/Edge 浏览器扩展 + Native Messaging 原生宿主，用于管理
+Whalekeeper 是一个 Chrome/Edge 浏览器扩展 + Native Messaging 原生宿主，用于管理
 DeepSeek Harness（dsh）的 Web 服务生命周期——在浏览器里一键启动 / 停止 / 重启
 `dsh web`（默认 `http://127.0.0.1:3080`），免开终端。M2 起附 `dsh-lifecycle` 插件：
 安装后停止走官方 dispose 优雅停机（`POST /_lifecycle/shutdown`），并提供

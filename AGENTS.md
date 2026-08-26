@@ -1,4 +1,4 @@
-# AGENTS.md — DSH Manager
+# AGENTS.md — Whalekeeper
 
 浏览器扩展 + Native Messaging 宿主，管理 DeepSeek Harness（dsh）web 服务生命周期：浏览器一键启动/停止/重启 `dsh web`（默认 http://127.0.0.1:3080），免开终端。
 
@@ -44,6 +44,7 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
 
 ## 当前状态与路线
 
+- **动效体系修复与重设计（2026-08-25，design §8.8 动效注记）**：用户实机反馈「启动/停止/重启动效丢失」——M11.1 V6 重构重写 popup.css 时遗漏整块动效规则，新旧版对比确认 4 项丢失/坏死：① `.spinner`/`.btn.is-pending`（按钮转圈+进度光标；HTML/JS 仍在，纯 CSS 缺失）② `prefers-reduced-motion` 无障碍全局块 ③ `.dot-busy` 琥珀色+1.2s 脉冲（JS 仍返回 `dot-busy` 类但 CSS 无定义 → starting/stopping 圆点退化为灰点无动画，rail-dot 同）④ `field-shake` 设置无效输入抖动（JS 在用，CSS 缺失）；`.icon-refresh` 刷新按钮转圈无须恢复（已移入隐藏 legacy 容器）。**按用户决策重设计（全 popup 动效体系，官方原厂克制动效）**：动效分层定格——长时状态=2.2s 同相分层呼吸（running/external/会话圆点，原厂时钟）；秒级过渡态=busy 琥珀 1.2s 轻脉冲（非 Matrix 点阵，M7 复盘语义）；操作反馈=spinner 0.8s/按压 scale(0.96)/toast 0.15s；导航=panel-slide-in 0.18s；表单校验=shake 0.3s；统一 transform/opacity、微交互 150-300ms、reduced-motion 全局关闭。verify-cdp busy 断言增强（starting/stopping 补 `dsh-dot-pulse` 动画名检查，防再遗漏），全量 **PASS 97 / FAIL 0**（headless Chrome 经 danger-full-access 侧挂实跑：busy=amber+`dsh-dot-pulse`+光晕静止，running/external 呼吸无回归，M9/M10/M11/主题/徽标全通过）。
 - **M11.1 Popup 空间架构升级（2026-08-25 完成与定稿，design §8.2）**：彻底解决传统单列 Popup 在会话展开、设置切换时的尺寸拉长与高度抖动问题，升级为 **V6 侧边 Rail 导轨模式（380px 宽度 × 270px 严格物理锁定高度，绝对零抖动）**。
   - **核心架构**：左侧 **46px 极窄 Rail 导轨**（概览/会话/设置 3 态导航 + 同相位 2.2s 常驻呼吸指示灯）+ 右侧 **334px 独立视口**（搭载 `panel-slide-in` 平滑进场动效）。
   - **官方原生资产库全量接入 (`dsh-assets-library.js`)**：100% 提取自 `@deepseek-ai/` 官方 bundle，包含 `FishLogo`（精准 23.16:17.04 比例，悬停触发原厂 `dsh-fish-swim` 游弋动效）、`BrandBadge`（`[DSH WEB]` 矩形微胶囊）、`StateMatrix`（进行中点阵）、4 态外观主题图标与全套业务图标。
