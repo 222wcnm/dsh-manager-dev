@@ -862,7 +862,18 @@ async function openWebUI(targetPath) {
   if (!port) return; // M4：动态端口未回填时无 URL 可开
 
   const pathSuffix = (typeof targetPath === 'string' && targetPath) ? targetPath : '/';
-  const targetUrl = 'http://127.0.0.1:' + port + (pathSuffix.startsWith('/') ? pathSuffix : '/' + pathSuffix);
+  // M13（§2.1.1 B1）：dsh ≥ 0.1.2 起裸 URL 打开会 401——新标签优先用 run 记录
+  // 捕获的 launchUrl（含 token query；§12.3 边界：仅用于打开标签，不写入
+  // storage、不显示在 UI 文本）。深链：token 是 query 参数，hash 后缀在 303
+  // 重定向后由浏览器保留（`/?token=…/#/chat/x` → 认证后 `/#/chat/x`）。
+  const bareUrl = 'http://127.0.0.1:' + port;
+  const launchBase = (detail && typeof detail.launchUrl === 'string' && detail.launchUrl.length > 0)
+    ? detail.launchUrl
+    : bareUrl;
+  const targetUrl = pathSuffix === '/' ? launchBase : launchBase + pathSuffix;
+  // 已有标签（已换取 cookie、URL 干净）的复用/跳转仍用裸 URL（避免重复走
+  // token 兑换重定向）
+  const bareTargetUrl = pathSuffix === '/' ? bareUrl : bareUrl + pathSuffix;
 
   // DSH Web UI 的两种可能 URL 前缀
   const prefixes = [
@@ -917,8 +928,8 @@ async function openWebUI(targetPath) {
       if (isErrorPage) {
         await chrome.tabs.reload(bestTab.id).catch(() => {});
       } else if (pathSuffix && pathSuffix !== '/' && bestTab.url && !bestTab.url.includes(pathSuffix)) {
-        // 软路由跳转到目标会话页
-        await chrome.tabs.update(bestTab.id, { url: targetUrl }).catch(() => {});
+        // 软路由跳转到目标会话页（已有标签已认证——用裸 URL，不带 token）
+        await chrome.tabs.update(bestTab.id, { url: bareTargetUrl }).catch(() => {});
       }
       return;
     }

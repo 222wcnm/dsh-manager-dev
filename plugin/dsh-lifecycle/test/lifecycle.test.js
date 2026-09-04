@@ -340,7 +340,19 @@ test('apply registers exactly four exact routes', () => {
 const ev = (type, data = {}, time = 1700000000000) => ({ type, seq: 1, time, data })
 
 function makeSession({ id = 'session-1', events = [], header = {} } = {}) {
-  return { id, events, header: { createdAt: 1700000000000, ...header } }
+  // rc.1+（dsh ≥ 0.1.2，§2.1.1 B5）：Session 类移除 `.events` 数组属性，
+  // 事件改经 `snapshotEvents()` 方法读取。桩同时暴露两形状：
+  // - `.events`（rc.2 及更早的旧形状，验证兼容回退路径）
+  // - `snapshotEvents()`（rc.1 新形状，验证主路径）
+  // 纯 rc.1 形状（仅 snapshotEvents、无 .events）由下方专门测试覆盖。
+  return {
+    id,
+    events,
+    snapshotEvents() {
+      return events
+    },
+    header: { createdAt: 1700000000000, ...header },
+  }
 }
 
 // A ctx whose ctx.get resolves the sessions/agents services for the endpoint.
@@ -408,6 +420,37 @@ test('sessions maps every state: idle / working / completed / waiting approval /
   assert.equal(byId.get('s-question').state, 'waiting')
   assert.equal(byId.get('s-idle').blank, true)
   assert.equal(byId.get('s-working').blank, false)
+})
+
+test('sessions: rc.1-shaped session (snapshotEvents only, no .events property) summarizes correctly', async () => {
+  // §2.1.1 B5：dsh ≥ 0.1.2 起 Session 类移除 `.events` 数组属性，事件改经
+  // `snapshotEvents()` 方法读取。此桩模拟 rc.1 真实形状（无 .events 键），
+  // 验证主路径（防「事件恒空 → 状态恒 idle」静默降级回归）。
+  const rc1Session = {
+    id: 's-rc1',
+    header: { createdAt: 1700000000000, cwd: 'D:\\w' },
+    snapshotEvents() {
+      return [ev('turn/start'), ev('turn/end')]
+    },
+  }
+  const { ctx, routes } = makeCtxWithSessions({ sessions: [rc1Session] })
+  const { status, body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  assert.equal(status, 200)
+  const [item] = JSON.parse(body).items
+  assert.equal(item.sessionId, 's-rc1')
+  assert.equal(item.state, 'completed')
+  assert.equal(item.blank, false)
+})
+
+test('sessions: a session with neither .events nor snapshotEvents degrades to idle without throwing', async () => {
+  const bare = { id: 's-bare', header: { createdAt: 1700000000000 } }
+  const { ctx, routes } = makeCtxWithSessions({ sessions: [bare] })
+  const { status, body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  assert.equal(status, 200)
+  const [item] = JSON.parse(body).items
+  assert.equal(item.sessionId, 's-bare')
+  assert.equal(item.state, 'idle')
+  assert.equal(item.blank, true)
 })
 
 test('sessions resolves an answered approval and an answered question back to completed', async () => {

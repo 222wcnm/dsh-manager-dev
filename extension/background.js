@@ -124,6 +124,8 @@ function getSettings() {
 
 // 本地健康探测：GET http://127.0.0.1:<port>/，1.5s 超时；
 // 任何 HTTP 响应码都算 up；fetch 抛错 -> false。
+// M13（§2.1.1 B1）：dsh ≥ 0.1.2 起 GET / 无凭据返回 401——fetch 仍正常 resolve，
+// 天然视为 up（401 恰证明 dsh 认证中间件已挂载），无需特判。
 async function probePort(port) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);

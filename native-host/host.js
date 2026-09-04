@@ -336,7 +336,10 @@ function pidLooksLikeDsh(pid, binPath) {
 // ---------------------------------------------------------------------------
 // 网络探测
 // ---------------------------------------------------------------------------
-// HTTP 探活：GET http://127.0.0.1:<port>/，timeoutMs 超时，任意 2xx/3xx 视为成功
+// HTTP 探活：GET http://127.0.0.1:<port>/，timeoutMs 超时，任意 2xx/3xx 视为成功。
+// M13（§2.1.1 B1）：dsh ≥ 0.1.2 起 GET / 对无凭据请求返回 401——401 恰证明 dsh
+// 认证中间件已挂载（比 200 更强的「这是 dsh 且已起来」信号），一并视为就绪。
+// 探测请求不得发送 Accept-Encoding（§2.1.1 B2，gzip 默认开启）。
 function httpProbe(port, timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
@@ -356,7 +359,7 @@ function httpProbe(port, timeoutMs) {
     }, (res) => {
       const code = res.statusCode || 0;
       res.resume(); // 丢弃响应体
-      finish(code >= 200 && code < 400);
+      finish((code >= 200 && code < 400) || code === 401);
     });
     req.on('timeout', () => finish(false));
     req.on('error', () => finish(false));
@@ -824,6 +827,10 @@ function listTcpListenersWin() {
 }
 
 // dsh 指纹探测：GET / 读响应体前 8KB，须含 'DeepSeek Harness'（真实 index.html <title>）
+// M13（§2.1.1 B1）：dsh ≥ 0.1.2 起 GET / 受启动令牌认证（无凭据 401 且 body 无指纹），
+// 指纹端点改探公开静态资产 /manifest.webmanifest（上游明示非 index 资产保持公开；
+// rc.2 与 0.1.2-rc.1 均 200 且含 "name": "DeepSeek Harness"；body 仅 267 字节，
+// 8KB 早退分支天然不触发）。探测请求不得发送 Accept-Encoding（§2.1.1 B2）。
 function httpDshProbe(port, timeoutMs) {
   return new Promise((resolve) => {
     let settled = false;
@@ -836,7 +843,7 @@ function httpDshProbe(port, timeoutMs) {
     const req = http.get({
       host: '127.0.0.1',
       port,
-      path: '/',
+      path: '/manifest.webmanifest',
       timeout: timeoutMs,
       headers: { Connection: 'close' },
       agent: false,
@@ -1219,17 +1226,14 @@ function readLogTail(lines) {
   }
 }
 
-// M4 动态端口发现（design §6.3 start）：从日志文件 byteOffset 之后的追加内容里
-// 解析 `dsh web: http://127.0.0.1:<port>` URL 行（真实 dsh 绑定后打印实际端口）。
-// 返回实际端口（1-65535，取最后一次匹配；port 0 的占位行被跳过），未找到返回 null。
-// 任何读取/解析失败静默返回 null（不抛，发现失败走 START_TIMEOUT/starting 兜底）。
-function discoverPortFromLog(byteOffset) {
+// 读取日志文件 byteOffset 之后的追加内容（UTF-8，尽力而为；失败/空返回 ''）。
+// M13：discoverPortFromLog 与 discoverLaunchUrlFromLog 共用的读取底座。
+function readLogSince(byteOffset) {
   try {
     const stat = fs.statSync(LOG_FILE);
     const offset = Number.isInteger(byteOffset) ? Math.min(Math.max(byteOffset, 0), stat.size) : 0;
-    if (stat.size <= offset) return null;
+    if (stat.size <= offset) return '';
     const fd = fs.openSync(LOG_FILE, 'r');
-    let raw = '';
     try {
       const len = stat.size - offset;
       const buf = Buffer.alloc(len);
@@ -1239,20 +1243,56 @@ function discoverPortFromLog(byteOffset) {
         if (n <= 0) break;
         off += n;
       }
-      raw = buf.subarray(0, off).toString('utf8');
+      return buf.subarray(0, off).toString('utf8');
     } finally {
       try { fs.closeSync(fd); } catch (e) { /* 忽略 */ }
     }
-    const re = /dsh\s*web:\s*https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})/gi;
-    let found = null;
-    let m;
-    while ((m = re.exec(raw)) !== null) {
-      const p = Number(m[1]);
-      if (Number.isInteger(p) && p >= 1 && p <= 65535) found = p;
-    }
-    return found;
   } catch (err) {
-    return null;
+    return '';
+  }
+}
+
+// M4 动态端口发现（design §6.3 start）：从日志文件 byteOffset 之后的追加内容里
+// 解析 `dsh web: http://127.0.0.1:<port>` URL 行（真实 dsh 绑定后打印实际端口）。
+// 返回实际端口（1-65535，取最后一次匹配；port 0 的占位行被跳过），未找到返回 null。
+// 任何读取/解析失败静默返回 null（不抛，发现失败走 START_TIMEOUT/starting 兜底）。
+function discoverPortFromLog(byteOffset) {
+  const raw = readLogSince(byteOffset);
+  if (raw === '') return null;
+  const re = /dsh\s*web:\s*https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})/gi;
+  let found = null;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    const p = Number(m[1]);
+    if (Number.isInteger(p) && p >= 1 && p <= 65535) found = p;
+  }
+  return found;
+}
+
+// M13（§2.1.1 B1/F5）：从日志 byteOffset 之后的追加内容捕获完整启动 URL 行
+// `dsh web: http://127.0.0.1:<port>/?token=...`（含进程级一次性 token query）。
+// 取最后一次匹配；URL 行可能带 ` (LAN: ...)` 后缀——`[^\s]+` 在空格处停，
+// 只捕获 loopback URL。任何失败静默返回 null。
+function discoverLaunchUrlFromLog(byteOffset) {
+  const raw = readLogSince(byteOffset);
+  if (raw === '') return null;
+  const re = /dsh\s*web:\s*(https?:\/\/[^\s]+)/gi;
+  let found = null;
+  let m;
+  while ((m = re.exec(raw)) !== null) found = m[1];
+  return found;
+}
+
+// M13：等待 launchUrl 出现（写 run 记录前调用）。动态端口场景端口行已出现
+// （端口就是从该行解析的）；固定端口场景 URL 行在 loader settled 后才打印、
+// 可能晚于 HTTP 就绪——短重试最多 timeoutMs（默认 5000，间隔 500ms）兜底。
+async function captureLaunchUrl(logStartBytes, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const url = discoverLaunchUrlFromLog(logStartBytes);
+    if (url !== null) return url;
+    if (Date.now() >= deadline) return null;
+    await sleep(500);
   }
 }
 
@@ -1360,6 +1400,8 @@ async function computeStatus() {
       const actual = discoverPortFromLog(rec.logStartBytes);
       if (actual !== null) {
         rec.port = actual;
+        // M13：旧记录可能缺 launchUrl（升级前写入）——顺带从日志补齐（无则保持 null）
+        if (typeof rec.launchUrl !== 'string') rec.launchUrl = discoverLaunchUrlFromLog(rec.logStartBytes);
         writeRunRecord(rec);
         log(`动态端口已从日志回填: ${actual}`);
         const probe = await httpProbe(rec.port, 1500);
@@ -1394,6 +1436,10 @@ function buildResult(state, rec, external) {
     pid: pid || null,
     port,
     url: port ? `http://127.0.0.1:${port}` : null,
+    // M13（§2.1.1 B1）：dsh ≥ 0.1.2 起裸 URL 打开会 401，扩展「打开 Web UI」需
+    // 携带 token；launchUrl 仅 managed 且日志捕获到时返回（含 token，§12.3 边界），
+    // external/adopted/未捕获为 null（扩展回退裸 URL）。
+    launchUrl: !isExternal && rec && typeof rec.launchUrl === 'string' && rec.launchUrl.length > 0 ? rec.launchUrl : null,
     version: rec && rec.version ? rec.version : 'unknown',
     startedAt: rec && Number.isInteger(rec.startedAt) ? rec.startedAt : null,
     lifecycle: false, // M2：running 时探测 /_lifecycle/health 可达才置 true（其余状态恒 false）
@@ -1534,8 +1580,14 @@ async function startDshCore(v, adoptedReplay) {
       }
       log(`载体启动完成，dsh PID 经端口表反查: ${pid}`);
     }
-    // 写 run 记录（原子）与冗余 pid 文件（锁内，M5.5）
-    const rec = makeRunRecord(v, bin, version, pid, targetPort, logStartBytes, adoptedReplay);
+    // 写 run 记录（原子）与冗余 pid 文件（锁内，M5.5）。
+    // M13：写记录前捕获完整启动 URL 行（含 token query，§6.2/F5）——固定端口场景
+    // URL 行在 loader settled 后才打印、可能晚于 HTTP 就绪，captureLaunchUrl 短重试
+    // 兜底（5s）；动态端口场景端口行已出现，首次即命中。捕获失败不阻塞启动
+    // （launchUrl=null，扩展回退裸 URL）。adopted 重放同样捕获本进程新打印的 URL
+    // （新进程新 token，不是复制旧记录，§12.3）。
+    const launchUrl = await captureLaunchUrl(logStartBytes);
+    const rec = makeRunRecord(v, bin, version, pid, targetPort, logStartBytes, adoptedReplay, launchUrl);
     writeRunRecord(rec);
     writePidFile(pid);
   } finally {
@@ -1593,8 +1645,9 @@ async function findPidByPortRetry(port) {
 }
 
 // 构造 run 记录（M5.5：pid/port 在启动流程后期才确定——端口就绪 + 端口表反查后写入；
-// 动态端口场景 port 恒为实际端口，不再有 0 占位期）
-function makeRunRecord(v, bin, version, pid, port, logStartBytes, adoptedReplay) {
+// 动态端口场景 port 恒为实际端口，不再有 0 占位期。
+// M13：launchUrl = 完整启动 URL 行（含 token query，§6.2/F5/§12.3），未捕获为 null）
+function makeRunRecord(v, bin, version, pid, port, logStartBytes, adoptedReplay, launchUrl = null) {
   return {
     pid,
     port,
@@ -1606,6 +1659,7 @@ function makeRunRecord(v, bin, version, pid, port, logStartBytes, adoptedReplay)
     version,
     binPath: bin,
     extraArgs: v.extraArgs,
+    launchUrl,
     ...(adoptedReplay ? { adopted: true } : {}),
     cmdline: [process.execPath, bin, '--profile', v.profile, '--host', v.host, '--port', String(v.port), ...v.extraArgs].join(' '),
   };

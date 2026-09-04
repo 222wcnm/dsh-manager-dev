@@ -136,6 +136,20 @@ dsh plugin --profile web install
       name: 'dsh-lifecycle'   # 或本包 checkout 的绝对路径
 ```
 
+> **rc.1 loader 装配要求（2026-09-04 真实 rc.1 实测，`native-host/test/e2e-rc1-isolated.js` 实证）**：
+> dsh ≥ 0.1.2（ESM loader）下，`name` 写裸路径（`D:/...`）报
+> `ERR_UNSUPPORTED_ESM_URL_SCHEME`（Windows 绝对路径必须是 `file://` URL），写目录
+> 报 `ERR_UNSUPPORTED_DIR_IMPORT`——**必须指向 `file://` URL 且为具体入口文件**：
+>
+> ```yaml
+> - insert:
+>     - id: dsh-lifecycle
+>       name: 'file:///D:/Browser_extension/dsh-manager/plugin/dsh-lifecycle/index.js'
+> ```
+>
+> （路径按实际 checkout 位置替换；`pathToFileURL` 可生成标准形式。）0.1.1-rc.2 及更早
+> 版本无此要求（CJS 装载器接受裸路径），但按上述写法兼容两端。
+
 ## 安全围栏
 
 插件路由**不经过** `/api` 网关的 trusted-host 围栏，由本插件自行校验（以下任一不满足即 403，

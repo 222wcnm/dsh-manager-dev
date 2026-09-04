@@ -39,10 +39,12 @@ DeepSeek Harness（以下简称 dsh，npm 包 `@deepseek-ai/dsh`）的 Web 界�
 
 ## 2. 现状核验（事实基线）
 
-以下结论基于本机实际安装的 `@deepseek-ai/dsh@0.1.0-rc.6` 逐条核验，作为设计依据：
+以下结论基于本机实际安装的 `@deepseek-ai/dsh@0.1.2-rc.1` 逐条核验（F1-F14 原始核验基于 `0.1.0-rc.6`，2026-08-28 按 rc.2 复核，**2026-09-04 本机已升级 rc.1 并全量复核**；上游 `0.1.2` 系列差异见 §2.1），作为设计依据：
 
 > **2026-08-14 在线复核（外部网络已恢复）**：npm `dist-tags.latest` = `0.1.0-rc.6`（无更高版本/正式版）；GitHub 仓库**无 releases**；GitHub 根 `LICENSE` 逐字核对为 MIT License, Copyright (c) 2026 DeepSeek（与本机 npm 包一致）。官方 `docs/` 文档体系存在且持续更新：`capability-seams.md` 将 `ctx.web` 列为官方 seam（provider 生态：`web-search-exa`、`web-search-perplexity`、`web-search-deepseek`、`web-fetch-http`），`ctx.webServer` 列为 core；`web-styling.md` 规范 `--dsw-*` 令牌；`appExit` 的书面文档仅存在于 `dsh-cmdline` 包 README（顶级 docs 未收录）——与 §7.3 的耦合风险结论一致。**本事实基线成立，无需更新。**
-> ⚠️ **2026-08-23 基线漂移警示（待全面复核）**：本机 dsh 已升级至 `0.1.1-rc.2`（M9 真实实例 e2e 即基于该版本，§8.10 已注明）——本节基于 0.1.0-rc.6 的核验**已过期**；涉及上游语义/API 的章节待按 0.1.1-rc.2 全量复核后更新（webui 事实基线 §8.9 已另按 0.1.1-rc.2 核验）。
+> ⚠️ **2026-08-23 基线漂移警示（已于 2026-08-28 处理）**：本机 dsh 已升级至 `0.1.1-rc.2`（M9 真实实例 e2e 即基于该版本，§8.10 已注明）。2026-08-28 已对本项目全部 dsh 接缝按 `0.1.1-rc.2` 复核，并前瞻核验上游未发布的 `0.1.2-alpha.1`——结论见 **§2.1 上游破坏性变更台账**。
+>
+> **2026-09-04 基线更新（本机已升级 `0.1.2-rc.1`）**：上游 `v0.1.2-rc.1` 已发布 npm 并成为 `latest`（`npm view dist-tags`：`{latest: 0.1.2-rc.1, next: 0.1.2-rc.1, alpha: 0.1.2-alpha.5}`）；本机全局升级 rc.1，真实 profile 插件同步更新为 M13 版（备份 `index.js.bak-pre-m13`）。全部 B/R 结论已按 rc.1 复核（§2.1.1），真机回归通过（`smoke-real.js` 全链路 + `e2e-m9-manager.js` 7/7 + 隔离 `e2e-rc1-isolated.js` 9/9，见 AGENTS.md 顶部 M13 记录）。
 >
 > **2026-08-26 M12 补充核验（事件契约，按本机 0.1.1-rc.2 源码）**：`session/event`（dsh-session `Session.append()` 同步发布钩子，**构造种子/回放事件不发射**）、`session/created`/`session/disposed`、`agent/status`（dsh-agent 的 `agentEvents` 融合发射 `{status, agent}`，dsh-agent-loop `setPhase` 状态转变时触发）；app 级（untagged）订阅者接收**全部**作用域会话事件（dsh-scope `scopeTarget` 向上流动语义）；`dsh-host-webserver` 支持 SSE 所需一切（`register` 精确路由 + dispose `closeAllConnections()` 强制断流）；官方 SSE 先例 `dsh-client-hmr` `GET /plugins/events`（L114-150）。**官方 `/api/events.host` 浏览器通道经实测为 WebSocket-only**（非 Upgrade GET → `426 upgrade required`，dsh-client-connection L538-544；host 帧仅 running bool，waiting 需 mux 帧=含消息内容，违反 §12.2）——M12 自建 SSE 推送端点（§8.10），不复用官方事件通道。
 
@@ -52,7 +54,7 @@ DeepSeek Harness（以下简称 dsh，npm 包 `@deepseek-ai/dsh`）的 Web 界�
 | F2 | CLI 仅有 profile 引导（`dsh web` = `dsh --profile web`）、`dsh plugin`、`--dump-config` 三类调用，**没有 start/stop/status 等生命周期子命令** | `lib/bin.js` 源码 | 生命周期必须由本项目实现，产品缺口真实存在 |
 | F3 | `dsh web` 支持 `--host <host>`、`--port <port>`（0 = 系统分配）、`--trusted-host <authority...>`；**拒绝 `--host 0.0.0.0`**（安全考虑） | `dsh-web-app/lib/startup.js` | v1 固定端口、固定 `127.0.0.1`，最稳 |
 | F4 | 默认端口 **3080**，默认主机 `127.0.0.1`（webserver 行的 fallback：`ctx.webStartup.port ?? 3080`） | `dsh-web-app/cordis.patch.yml` | 扩展默认配置值取 3080 |
-| F5 | 启动成功后打印 `dsh web: http://127.0.0.1:<port>` | `dsh-web-app/lib/index.js` | 日志解析可拿到实际端口（为 `--port 0` 预留） |
+| F5 | 启动成功后打印 `dsh web: http://127.0.0.1:<port>`（dsh ≥ 0.1.2 起该行携带启动令牌 query：`.../?token=...`，见 §2.1.1 B1） | `dsh-web-app/lib/index.js` | 日志解析可拿到实际端口（为 `--port 0` 预留）；现有正则 `dsh\s*web:\s*https?:\/\/(?:127\.0\.0\.1\|localhost\|\[::1\]):(\d{1,5})` 只捕获端口、不越过 `/?token=`，**0.1.2 下仍正确**（已核对）。**M13 起**：同一轮扫描捕获完整 `dsh web: <url>` 行（含 token query）写入 run 记录 `launchUrl`——0.1.2 起裸 URL 打开会 401，扩展「打开 Web UI」须携带 token。**落地边界（M13 决策，§12.3）**：`launchUrl` 仅存本机 run 记录（与 dsh 日志同信任域——token 本就被 dsh 打印进日志文件）、仅经 native 通道返回扩展 SW 用于打开标签；**不写入 storage.local、不显示在 UI 文本、不外传**（扩展侧行为约束见 §8.2）。 |
 | F6 | profile 目录：`$DSH_HOME/profiles/<name>/cordis.yml`（本机 `DSH_HOME=C:\Users\<user>\.dsh`）；用户覆盖层是 `cordis.patch.yml` | 本机文件系统 | 宿主必须透传 `DSH_HOME` 环境变量 |
 | F7 | 进程退出：`profile-boot` 注册了 SIGINT（exit 130）/ SIGTERM（exit 0）→ 先 dispose 整棵 fiber 树再退出 | `lib/profile-boot-*.js` | POSIX 可优雅停；**Windows 无法从外部触发这两个处理器**（Node 的 `process.kill(pid,'SIGTERM')` 在 Windows 上是 TerminateProcess 硬杀） |
 | F8 | 会话持久化：session checkpoint 策略在「模型请求前、工具副作用前」落盘（JSONL 增量写） | `dsh-session-checkpoint-policy` | 硬杀进程最多丢失最后几秒状态，可接受 |
@@ -62,6 +64,108 @@ DeepSeek Harness（以下简称 dsh，npm 包 `@deepseek-ai/dsh`）的 Web 界�
 | F12 | 优雅退出出口：`dsh-cmdline` 的 `provideCmdline` 提供 **`appExit` 服务**（= launcher 的 `shutdown` → `fiber.dispose()` → exit）；`webServer` 服务提供 `register({kind:'exact', path, handler})` 路由注册契约 | `dsh-cmdline/lib/index.js`、`dsh-host-webserver/lib/index.js` | 生命周期插件可走官方 dispose 路径（§7）；插件路由不经过 `/api` 围栏，需自管安全 |
 | F13 | dsh 是 MIT 协议开源项目（github.com/deepseek-ai/deepseek-harness，根 LICENSE 已逐字核对），插件体系为 Cordis；官方 `docs/` 有 architecture/capability-seams/api-gateway 等文档 | 官方 README / npm / GitHub | 生命周期插件可行（M2）；上游反馈走 GitHub Discussions 与插件生态（**官方暂不接受外部 PR**，2026-08-13 公告） |
 | F14 | Web 客户端主题：内置 `light`/`dark` 两主题 + `system` 偏好（默认 system）；偏好持久化于 settings namespace `ui-theme.preference`（**host 用户设置文档，非浏览器 localStorage**）；实际渲染以 `body[data-ds-dark-theme]` 属性标记（浅色无属性）；全部 `--dsw-*` 令牌（static/alias/specific）**浅/深两套**由主题插件经内联 CSS 注入 | `dsh-client-ui-theme/lib/client.js`（打包源码，2026-08 核验） | 扩展深色模式可复刻同一令牌体系与渲染标记（§8.7）；主题偏好不能从浏览器侧直接读取（F9/F10 围栏），扩展走 DOM 镜像 |
+
+---
+
+## 2.1 上游破坏性变更台账（dsh 版本跟踪）
+
+**用途**：dsh 是预发布期项目，官方明示**重命名不留兼容别名**（旧名直接失效）。本节是本项目对上游变更的**单一跟踪点**：每次上游版本跳变，按本表逐行复核，受影响项进入路线图；无影响项亦如实登记，避免下次重复调查。
+
+**核验方法**：`git diff <旧 tag>..<新 tag>` 逐一比对本项目实际用到的接缝（不做全仓审计）。本项目对 dsh 的耦合面很窄，只有两处：
+
+| 耦合面 | 位置 | 依赖内容 |
+|---|---|---|
+| **插件侧（host 内）** | `plugin/dsh-lifecycle/index.js` | Cordis 服务与事件：`webServer`（`register`/`registerFallback`/`port`）、`appExit`、`ctx.sessions`、`ctx.agents`、`workspaceRegistry.archivedSessionIds`、会话事件类型契约 |
+| **宿主侧（进程外）** | `native-host/host.js` | CLI argv 形态（`dsh web` / `--profile` / `--host` / `--port`）、启动日志 URL 行（F5）、回环 HTTP 探测语义 |
+
+扩展侧（`extension/`）对 dsh 的唯一耦合是 webui 的 `data-state` DOM 属性（§8.9 事实基线），不走 dsh 的任何 API。
+
+---
+
+### 2.1.1 `0.1.1-rc.2` → `0.1.2-rc.1`（2026-09-03 GitHub release；**2026-09-04 晚 npm 已发 `latest`/`next` = rc.1**）
+
+**发布状态（2026-09-04 两次复核）**：npm `dist-tags` 初查 = `{latest: 0.1.1-rc.2, next: 0.1.1-rc.2, alpha: 0.1.2-alpha.5}`；**当晚复查（`npm view dist-tags`）→ `{latest: 0.1.2-rc.1, next: 0.1.2-rc.1, alpha: 0.1.2-alpha.5}`**——`v0.1.2-rc.1` 已正式发布到 npm 并成为 `latest`。alpha.1 核验（2026-08-28）→ **rc.1 源码复核（2026-09-04，本地 `D:\deepseek-harness` checkout `dsh-v0.1.2-rc.1`）**：本节全部 B/R 结论已按 rc.1 复验，**新增 B5（`Session.events` 移除，插件硬破坏）**。**本机已升级 `0.1.2-rc.1`（2026-09-04）**，真机回归已跑通（smoke-real 全链路 + e2e-m9-manager 7/7 + 隔离 e2e-rc1-isolated 9/9，见 AGENTS.md 顶部 M13 记录）；本节台账已按 rc.1 全量验证。
+
+#### 🔴 B1 — `dsh web` 引入浏览器启动令牌认证（**唯一硬破坏**）
+
+- **上游依据**：新增 `packages/client/connection/src/browser-auth.ts`（rc.2 无此文件）；Agent Note `2026-08-24-browser-token-authentication`；新增真实 CLI 测试 `apps/cli/tests/web-auth.e2e.ts`。
+- **变更语义**：`frontend-static` 的 fallback 由无条件 `serveStatic(...)` 改为先过 `() => ctx.connection.authorizeIndex(req, res)` 闸门。`GET /` 无有效凭据 → **401**，body 为 `dsh web authentication required; reopen the URL printed by dsh web.`。每进程生成一次性启动令牌，只经 `GET /?token=<token>` 兑换为签名 cookie（authority 绑定、`HttpOnly`、`SameSite=Strict`，默认 30 天）后重定向到干净的 `/`。启动 URL 行因此变为 `dsh web: http://127.0.0.1:<port>/?token=...`。
+- **rc.1 复核（2026-09-04）**：`browser-auth.ts` `authorizeIndex` 对**所有 index 请求生效、无回环豁免**（不检查 `remoteAddress`，回环 127.0.0.1 同样 401）；`frontend-static` 的 `serveStatic` 仅对 index（`/` 与 `distIndex`）调用 `authorizeIndex`，其余静态资产（含 `/manifest.webmanifest`）**保持公开**——修复方案在 rc.1 下依然成立。
+- **本项目受损点**：
+
+  | 函数 | 现判定条件 | 0.1.2 下结果 |
+  |---|---|---|
+  | `httpProbe`（host.js:340） | `code >= 200 && code < 400` | 401 落在范围外 → **恒 false** |
+  | `httpDshProbe`（host.js:827） | 响应体前 8KB 含 `DeepSeek Harness` | 401 body 无指纹 → **恒 false** |
+
+- **故障表现**：`start` 实际成功但轮询 30s 后误报 `START_TIMEOUT`（§6.3 start 第 7 步）；`status` 存活判定恒失败，状态永久停在 `starting`（§6.3 status 第 4 步）；`discoverExternalDsh` 指纹闸门恒不通过 → 外部实例发现与 `adopt` 全部失效（§6.6 第 5 步）。**`stop` 不受影响**——`waitStopped`/`portConnectable` 走 TCP 层，不看 HTTP 状态码。
+- **修复方案（已实测验证，向后兼容 rc.2）**：Agent Note 明确「非 index 静态资产保持公开」。`apps/web/public/manifest.webmanifest` 在 rc.2 与 alpha.1 中**内容一致**且含 `"name": "DeepSeek Harness"`。本机 3080（rc.2）实测：`GET /manifest.webmanifest` → `200 application/manifest+json`，267 字节，含指纹。故：
+  1. `httpDshProbe` 指纹端点 `/` → `/manifest.webmanifest`（判定逻辑不变；body 仅 267 字节，8KB 早退分支天然不触发）；
+  2. `httpProbe` 将 **401 亦视为就绪**（401 证明 dsh 认证中间件已挂载，是比 200 更强的「这是 dsh 且已起来」信号），或同样改探 `/manifest.webmanifest`。
+  **rc.1 复核（2026-09-04）**：`apps/web/public/manifest.webmanifest` 内容不变（仍含 `"name": "DeepSeek Harness"`）；启动 URL 行 `dsh web: http://127.0.0.1:<port>/?token=...` 不变（`packages/bundle/web-app/src/index.ts` L280 实证）。
+- **禁忌**：探测请求**不得**添加 `Accept-Encoding` 头（原因见 B2）。
+- **状态**：待实施，见 §15 M13。
+
+#### 🟡 B2 — webserver 默认启用 gzip 压缩
+
+- **上游依据**：`packages/host/webserver` 新增可选 config `compression: 'none'|'gzip'`（默认 `'none'`）、`compressionLevel`、`compressionThresholdBytes`，新增依赖 `compression@^1.8.1` + `negotiator@^1.0.0`；`packages/bundle/web-app/cordis.patch.yml` 的 webserver 行**显式设为 `compression: gzip, compressionLevel: 1, compressionThresholdBytes: 1024`**——即 `dsh web` 默认开启。
+- **本项目影响：无（有条件）**。Node `http.get` 默认不发 `Accept-Encoding`，`negotiator` 在该头缺失时选 `identity` → 响应不压缩，宿主全部探测函数的 body 解析路径不变。SSE 侧 compression 中间件跳过 `text/event-stream`，且上游中间件另跳过无 `res.socket` 的响应，`/_manager/events`（§8.10.1）保持不缓冲。
+- **约束（写入本节以防未来回归）**：宿主与面板的任何 dsh HTTP 探测**一律不显式发送 `Accept-Encoding`**；确有需要时必须同步实现 gzip 解码，否则 `getHealth`/`getManagerSessions` 的 `JSON.parse` 会拿到二进制。
+
+#### 🟢 B3 — 插件侧接缝全部存活（逐项核验通过）
+
+对 `plugin/dsh-lifecycle/index.js` 用到的每个 seam 比对 alpha.1 源码，**全部存在且形状兼容，插件零改动**：
+
+| 接缝 | alpha.1 状态 |
+|---|---|
+| `webServer.register({kind:'exact'\|'prefix'})` / `registerFallback` / `port` | 不变（仅新增可选 compression config，见 B2） |
+| `appExit`（`ctx.provide('appExit', host.exit)`，`packages/boot/cmdline`） | 不变 |
+| `ctx.sessions`：`get(id)` / `list()` / `session.header.{cwd,origin,createdAt}` | 不变（**`session.events` 数组属性 rc.1 已移除，改 `snapshotEvents()`，见 B5**） |
+| 事件 `session/created` / `session/disposed` / `session/event` | 不变 |
+| `ctx.agents`：`get(id).status`（`'idle'\|'running'`）/ `list()`、事件 `agent/status` | 不变（`Agent.status` 移入 `declare module` 合并，运行时同形） |
+| `workspaceRegistry.archivedSessionIds` | 不变（host 侧保留，另供新 `workspace-controller` 消费） |
+| `approval/asked` = `{id,toolName,callId?,reason?}` / `approval/decided` = `{id,outcome}` | 不变（声明位置从被删的 apiproxy 类型链移到 `packages/interaction/user-approval`） |
+| `tool/call.data.callId` ↔ `tool/result.data.message.source.callId`（`ToolMessageSource`） | 不变 |
+| `subagent/start` / `subagent/end`（runId 配对）/ `subagent/descriptor` | 不变 |
+| `session/title` / `turn/start` / `turn/end` | 不变 |
+
+#### 🟢 B4 — 上游大改但与本项目无关（登记备查，避免重复调查）
+
+| 上游变更 | 为何不影响本项目 |
+|---|---|
+| **PTC 重命名**（`tools.mode: 'code'`→`'ptc'`、preset 目录 `presets/code`→`presets/ptc`、`CodeDispatch*`→`PtcDispatch*`、prompt 规则 `tools:code-only`→`tools:ptc-only`） | 属 agent preset / 工具呈现层；本项目不编排 preset、不读 dispatch 日志。注：`run_code`、`dsh-code-runtime*` 及**持久日志词汇** `tool/code-dispatch*` 刻意未改名（推迟至 v0→v1） |
+| **删除 `packages/client/runtime` 聚合包**（hook 拆分为 `ui-session`/`ui-conversation`/`ui-chat`/`ui-trajectory`） | 本项目无 React、无 `dsh.client.*` 声明、不 import 任何 client 包（面板是 content script + Shadow DOM，§8.6 决策） |
+| **删除 `packages/host/apiproxy`**（含 settings/credentials/directory-picker RPC 移除） | 本项目从不调用 `/api`（F9/F10：扩展 Origin 必被围栏拒绝，早已设计为不依赖） |
+| **SQLite 持久化 schema 18**（无 17→18 迁移） | JSONL 仍是发行默认；本项目不读会话存储，只读 host 内存态 |
+| **`SessionEvent.ignorable` 字段删除**、`CallId`→`ToolCallId` 类型重命名 | 插件不读 `ignorable`；`ToolCallId` 是 TS 类型别名，JS 插件无感 |
+| **`todo/write` 从 `SessionEventMap` 移除**（`TodoItem` 类型删除） | 插件的 `RELEVANT_EVENT_TYPES` 不含该类型（M8 徽标的"完成待办"语义来自 webui DOM 扫描，非该事件） |
+| **`known-event-types.ts` 新增 3 项**（`model/selection`、`subagent/model-selection-policy`、`session-log-deepseek/delivery-accepted`） | 插件按 type 白名单取用、未知类型忽略，新增项不触发任何分支。**但见 R1 降级警示** |
+| **`dsh` 单一启动器**（所有 app 经 `dsh` + named profile，无转发兼容 bin） | `dsh web` 别名保留，且宿主本就以 `--profile web` 显式形式 spawn（§6.3 start 第 5 步），argv 契约不变 |
+| **webui `StateDot` 组件** | `data-state` = `'done'\|'warning'\|'ongoing'\|'error'` 契约完全不变（alpha.1 仅删了一段注释）；`ongoing` 仍渲染 `<svg data-state="ongoing">` 8 格点阵 → §8.9 检测层零改动 |
+
+#### 🔴 B5 — `Session.events` 数组属性移除，改为按需读取 API（**插件硬破坏**）
+
+- **上游依据**：`packages/core/session/src/index.ts` 的 `Session` 类（rc.1）只暴露 `eventAt(seq)` / `snapshotEvents(fromSeq, toSeqExclusive)` / `ownEvents()` 方法，**无 `.events` 数组属性**（tool-cordis api-catalog 类型声明同步确认）；官方 release notes：「Replace `Session.events` with on-demand read APIs: `seq`, `eventAt()`, and `snapshotEvents()`」（alpha.4 起，rc.1 确认）。
+- **本项目受损点**：`plugin/dsh-lifecycle/index.js` 两处读 `session.events` / `child.events` —— `summarizeSession()`（L154 `const events = session.events ?? []`）与 `buildChildLabelMap()`（L195 `child.events`）。rc.1 下取到 `undefined` → 事件扫描恒空 → 会话状态恒 `idle`、无 title、子代理不可见（静默降级，不抛错但功能失效）。
+- **修复方案**：两处改调 `session.snapshotEvents()`（返回只读数组，元素形状与旧 `.events` 同构：`{type,data,seq,time}`，`foldTitle` / `hasPendingInteraction` / `activeChildIds` 逻辑不变）；测试桩 `makeSession` 同步改为提供 `snapshotEvents()` 方法。
+- **状态**：随 M13 一期修复（2026-09-04 实施；**真实 rc.1 真机验证同日：`native-host/test/e2e-rc1-isolated.js` 9/9 PASS**——插件在真实 rc.1 上 `/_manager/sessions` 200，B5 适配生效）。
+
+#### ⚠️ R1 — 会话日志读取 fail-closed（**单向升级警示，非本项目缺陷**）
+
+上游 `2026-08-25-fail-closed-session-event-vocabulary`：未知事件类型不再被忽略，而是**拒绝读取整个日志**。因 0.1.2 会写入 B4 表中的 3 个新事件类型，**一旦用 0.1.2 跑过会话，再降级回 0.1.1-rc.2 将无法读取这些日志**。这与本项目无关，但影响用户的升级决策——`restart` 不会重装 dsh，故本项目不会自动触发；写在此处供发布说明引用。
+
+#### ⚠️ R2 — 插件 peerDependencies 范围语义已不精确
+
+`plugin/dsh-lifecycle/package.json` 声明 `">=0.1.0-rc.6 <0.2.0"`。标准 semver 下预发布版不落入普通范围，实测：
+
+| 版本 | `satisfies` | `satisfies` + `includePrerelease` |
+|---|---|---|
+| `0.1.0-rc.6` | ✅ | ✅ |
+| `0.1.1-rc.2` | ❌ | ✅ |
+| `0.1.2-alpha.1` | ❌ | ✅ |
+| `0.1.2` | ✅ | ✅ |
+
+即该范围对**当前正在运行的 rc.2 就已「不满足」**，只因 dsh 未强制校验 peerDeps 而无实际后果。欲真正涵盖预发布版应写 `">=0.1.0-rc.6 <0.2.0-0"`。低优先级，**随 M13 一并修正（2026-09-04 已改）**。
 
 ---
 
@@ -246,6 +350,7 @@ Popup 对 `starting` / `stopping` 的处理：收到 ack 后进入轮询（每 1
     "pid": 12345,                 // running/starting/stopping/external 时存在
     "port": 3080,                 // managed 动态端口未回填时（--port 0 占位期）为 null
     "url": "http://127.0.0.1:3080",
+    "launchUrl": "http://127.0.0.1:3080/?token=...",  // M13：managed 且日志解析到完整启动 URL 时返回（含 token，仅扩展 SW 用于打开标签；external/adopted/未解析为 null，§12.3）
     "requestedPort": 0,           // 仅 --port 0 且 port 未知时出现（0 = 端口自动分配中）
     "version": "0.1.0-rc.6",      // dsh --version，status 时返回；external 为 "unknown"
     "startedAt": 1739420000000,   // external 为 null（启动时刻未知）
@@ -305,7 +410,7 @@ Popup 对 `starting` / `stopping` 的处理：收到 ack 后进入轮询（每 1
 1. 读 `run\dsh-web.json`；不存在 → 执行外部实例发现（§6.6）：发现则返回 `external`（附 `source:"external"`、真实 pid/port/url 与 `externalCount`），否则 `stopped`（顺带清理孤儿 pid 文件）。
 2. `process.kill(pid, 0)` 判定存活；已死 → 清理记录 → 同第 1 步执行外部实例发现。
 3. 加固检查（可选开关）：用 `Get-CimInstance Win32_Process -Filter "ProcessId=<pid>"` 校验命令行包含 `dsh`，防止 PID 复用误判/误杀；校验不过 → 清理记录 → 同第 1 步。
-4. HTTP 探活：`GET http://127.0.0.1:<port>/`，超时 1.5s。200 → `running`；失败但 PID 存活 → `starting`（进程在加载依赖，dsh 冷启动可达数秒）。
+4. HTTP 探活：`GET http://127.0.0.1:<port>/`，超时 1.5s。200 → `running`；失败但 PID 存活 → `starting`（进程在加载依赖，dsh 冷启动可达数秒）。**认证兼容（§2.1.1 B1）**：dsh ≥ 0.1.2 的 `GET /` 对无凭据请求返回 **401**，故判定须把 401 一并视为就绪（401 恰证明 dsh 认证中间件已挂载），或改探公开静态资产 `/manifest.webmanifest`；探测请求**不得**发送 `Accept-Encoding`（§2.1.1 B2）。**M13**：status result 附带 `launchUrl`（读 run 记录；external/adopted/未捕获为 null，§6.2）。
 5. 附带 `dsh --version`（缓存到 run 记录，避免每次 status 都跑子进程）。
 6. running 时探测 `GET http://127.0.0.1:<port>/_lifecycle/health`（1.5s 超时，失败静默）：可达则附带 `health` 富状态且 `lifecycle:true`；不可达则 `health:null`、`lifecycle:false`（富状态**不可作为存活判定的唯一依据**，§4.2.6）。
 
@@ -329,10 +434,10 @@ Popup 对 `starting` / `stopping` 的处理：收到 ack 后进入轮询（每 1
    - 日志文件先 `mkdir -p`：POSIX 用追加打开的 fd（`fs.open(..., 'a')`），宿主退出后 fd 随宿主关闭，不影响 dsh 后续写入；Windows 由 cmd 重定向追加（语义一致）。
    - **不用 pipe**：pipe 会在宿主退出后产生 EPIPE 风险；日志文件同时是 M3「查看日志」与「解析实际端口」的数据源（F5）。
    - **隐藏控制台载体（M5.5，2026-08-15 实现）**：Windows 下 `detached:true` 由 libuv 无条件加 `DETACHED_PROCESS`（子进程既不继承也不新建控制台），且受限令牌下 `CREATE_NO_WINDOW` 不可用（`STATUS_DLL_INIT_FAILED`，`@deepseek-ai/dsh-sandbox-windows-acl` README 记载）——直接 spawn 的 dsh 必然无控制台，其每次执行命令都会新建一闪而过的终端窗口。M5.5 改为**隐藏控制台载体**启动：宿主先写 `launch-hidden.vbs`（`BASE_DIR` 下，运行时自生成），再 `wscript.exe` 执行 `WScript.Shell.Run(cmd, 0, False)`——`windowStyle=0`（SW_HIDE）使 dsh 获得一个**存在但从不显示**的控制台：其命令子进程继承该控制台（不再闪窗），桌面也无常驻窗口。**必须显式 `cmd /d /c call` 执行**：`WshShell.Run` 对引号开头（exe 路径）的命令直接 CreateProcess，`1>> 日志 2>&1` 会被当成普通参数丢失（实测发现，2026-08-15）；`call` 同时避开 cmd /c 的剥引号规则；`%` 按 cmd 规则转义为 `%%`。载体进程（wscript→cmd）即刻退出，dsh 独立存活。**实测核验（EnumWindows 窗口枚举）**：载体下 dsh 控制台窗口存在但不可见（IsWindowVisible=false），其子进程零新窗口（对比直接 spawn 时子进程弹可见新终端，2026-08-15）。POSIX 无控制台概念，维持直接 spawn。若 dsh 上游修复受限令牌限制（沙箱可直接 `CREATE_NO_WINDOW`），可移除载体回归直接 spawn。
-6. 写 run 记录（先写 `.tmp` 再 `rename`，内容含 pid、port、profile、startedAt、version、cmdline；M4 新增 `requestedPort` 与 `logStartBytes`（spawn 时刻日志字节偏移））。**M5.5 时序**：记录在「端口就绪 + PID 已知」后才写——Windows 载体不回传 PID，端口就绪后经端口表反查（`findPidByPort`，带 200ms 短重试）；启动期间（端口就绪前）无记录，status 显示 stopped（快速连点由第 2 步的锁兜底，见第 7 步）。失败路径（`START_TIMEOUT` / 动态端口未报告）**尽力回写**：POSIX 直接用 spawn 已知的 pid；Windows 端口已知时经端口表反查、未知时经进程表匹配 bin+`--port 0`（尽力而为）；匹配失败仅记日志——实例可能仍在运行，刷新 popup 后可按 external「接管」停止。
+6. 写 run 记录（先写 `.tmp` 再 `rename`，内容含 pid、port、profile、startedAt、version、cmdline；M4 新增 `requestedPort` 与 `logStartBytes`（spawn 时刻日志字节偏移）；**M13 新增 `launchUrl`**——完整启动 URL 行 `dsh web: <url>`（含 token query，§6.2/F5）：固定端口在就绪轮询内（第 7 步）从日志捕获，`--port 0` 在第 9 步回填端口时一并捕获；未捕获为 null，不阻塞启动）。**M5.5 时序**：记录在「端口就绪 + PID 已知」后才写——Windows 载体不回传 PID，端口就绪后经端口表反查（`findPidByPort`，带 200ms 短重试）；启动期间（端口就绪前）无记录，status 显示 stopped（快速连点由第 2 步的锁兜底，见第 7 步）。失败路径（`START_TIMEOUT` / 动态端口未报告）**尽力回写**：POSIX 直接用 spawn 已知的 pid；Windows 端口已知时经端口表反查、未知时经进程表匹配 bin+`--port 0`（尽力而为）；匹配失败仅记日志——实例可能仍在运行，刷新 popup 后可按 external「接管」停止。
 7. 释放锁（**M5.5：锁保持到 run 记录写入完成之后**——启动窗口内并发 start 被锁挡下，`--port 0`（无占用探测）亦被覆盖，防双开；轮询在锁内进行）；轮询端口（500ms 间隔，最长 30s）。就绪 → `running`；超时 → 返回 `START_TIMEOUT` + 日志尾部（此时**不杀进程**，交由用户查看日志后决定；进程可能仍在后台最终就绪）。
 8. `unref()` child 句柄，宿主随时可安全退出。
-9. **M4 动态端口（`--port 0`）**：第 7 步之前先轮询日志（仅解析 `logStartBytes` 之后的追加内容，排除历史实例干扰）匹配 `dsh web: http://127.0.0.1:<port>` URL 行（真实 dsh 绑定后打印实际端口；port 0 占位行跳过），发现后**回填 run 记录实际端口**再按常规探活；30s 未发现 → `START_TIMEOUT`。status 遇 port 0 占位记录同样尝试回填（自愈），回填前对外报 `port:null` + `requestedPort:0`、状态 `starting`。
+9. **M4 动态端口（`--port 0`）**：第 7 步之前先轮询日志（仅解析 `logStartBytes` 之后的追加内容，排除历史实例干扰）匹配 `dsh web: http://127.0.0.1:<port>` URL 行（真实 dsh 绑定后打印实际端口；port 0 占位行跳过），发现后**回填 run 记录实际端口**再按常规探活；30s 未发现 → `START_TIMEOUT`。status 遇 port 0 占位记录同样尝试回填（自愈），回填前对外报 `port:null` + `requestedPort:0`、状态 `starting`。**M13**：同一轮日志扫描同时捕获完整 `dsh web: <url>` 行（含 token query）写入 run 记录 `launchUrl`（固定端口实例同样捕获，见第 6/7 步）。
 
 **stop**
 
@@ -423,7 +528,7 @@ run 记录示例：
 2. **过滤 dsh 入口**：CommandLine 匹配 `@deepseek-ai\dsh\lib\bin.js`，且属于 web 实例（含 `--profile web` / 位置参数 `web` / `--port` 任一）；进程须 PID 存活。已知局限：非 npm 布局（源码 checkout 直跑）不识别，v1 可接受。
 3. **解析端口**：从 CommandLine 解析 `--port <n>` 或 `--port=<n>`；`--port 0` 或缺省 → 走第 4 步。
 4. **动态端口回退**：`netstat -ano -p TCP` 解析该 PID 的全部 `LISTENING` 端点（IPv4 `addr:port` 与 IPv6 `[addr]:port` 两种行格式），回环（`127.0.0.1`/`::1`/`::ffff:127.0.0.1`）与通配（`0.0.0.0`/`::`）绑定的端口作为候选。测试钩子 `DSH_MANAGER_FAKE_LISTENERS`（`[{pid,addr,port}]`）。
-5. **dsh 指纹探测（误报闸门）**：对候选端口 `GET http://127.0.0.1:<port>/`（1.5s 超时），读取响应体前 8KB，须包含 `DeepSeek Harness`（真实前端 `dist/index.html` 的 `<title>`，已核验）。指纹不匹配的端口（其他 node 服务、PID 复用残留）一律不报告。
+5. **dsh 指纹探测（误报闸门）**：对候选端口 `GET http://127.0.0.1:<port>/manifest.webmanifest`（1.5s 超时），响应体须包含 `DeepSeek Harness`。指纹不匹配的端口（其他 node 服务、PID 复用残留）一律不报告。**指纹端点选型（§2.1.1 B1）**：原用 `GET /` 读 `dist/index.html` 的 `<title>`——dsh ≥ 0.1.2 起 `/` 受启动令牌认证保护，无凭据返回 401 且 body 无指纹，闸门会恒不通过；`manifest.webmanifest` 属上游明示「保持公开」的非 index 静态资产，其 `"name": "DeepSeek Harness"` 在 0.1.1-rc.2 与 0.1.2-alpha.1 中一致，且仅 267 字节（8KB 早退分支不触发），rc.2 与 0.1.2 双向兼容。
 6. **报告**：第一个匹配实例作为 `external` 状态返回（pid/port/url，`startedAt:null`、`version:"unknown"`）；多个匹配时附 `externalCount`。已知局限：仅探测回环绑定，LAN 地址绑定的外部实例不在 v1 范围。
 
 **管理边界（安全）**
@@ -915,6 +1020,7 @@ popup 设置面板新增「外观」行（四个互斥选项按钮），复刻 W
   - **范围决策**：v1 端点只返回 **live（attached）会话**——§8.10 验收 e2e 场景（start → 当前会话行 → 状态流转）即 live；冷会话（历史）状态恒为 completed/idle、title 需读持久化，价值低且增加读盘成本，留给后续增强。
   - **idle 实际存在性注记（2026-08-24 用户实机观察）**：新会话默认**不在** Web UI 会话列表；创建后才出现，但**若未发送任何内容就离开该会话，它不会存在**（不保留下落）。即"空壳会话"（blank）在 live 集合里实际不出现——idle 的典型场景进一步收窄为"已承载内容但从未完成过任意一轮"的边角情形（近零出现）；这也解释了用户"空闲没用"的直觉（Web UI 本体同样不分 idle/completed，统一 data-state=done）。倾向：若后续优化，以 popup 折叠/弱化 idle 为优先（不动契约）。
   - **M12.1 补正（2026-08-26 用户实机反馈：计划待审显示为「进行中」而非「待确认」；本会话事件流实测）**：plan-review 的 Web UI 「计划待审」面板由**客户端帧**驱动——`dsh-plan-mode` 的 `exit_plan_mode` 工具执行体经 `ctx.userQuestions.ask({questions:[{intent.kind:'plan-review'}]})`（dsh-plan-mode L286-311）发出 `question/requested` **客户端 UI 帧**（dsh-client-runtime），**不进服务端 session 事件流**（本会话 31 种事件类型无 question 类，实证）；服务端唯一权威信号 = **`exit_plan_mode` 工具的 call↔result 配对**（提交计划即调用并阻塞等待，用户确认/拒绝后 result 才 append——实测时序 11:42:51 `tool/call` → 11:44:28 `tool/result`）。**修正**：`hasPendingInteraction` 工具配对白名单由 `ask_user_question` 扩为 `ask_user_question | exit_plan_mode`；**不可**用 `plan/mode {active:true}` 单独判等待（该事件从"模型正在写计划"阶段即 true，早于 wait 语义对应的 question/requested 帧时刻——双条件冗余且不如 call↔result 精确）。「拒绝/继续规划」路径 result（含错误）照常 append，闭合成非等待，语义与客户端 pendingInteraction 清除对齐。
+- **rc.1 适配注记（2026-09-04，§2.1.1 B5）**：dsh ≥ 0.1.2 起 `Session.events` 数组属性移除，插件统一改 `session.snapshotEvents()` 读取事件流（返回数组形状同构）；`agents.get(id).status`、`session/created|disposed|event`、`agent/status`（`{agent,status}`，`agentEvents` 融合主体）、`subagent/*`、`session/title`、`turn/*`、`approval/*` 事件均存活（rc.1 源码复核）。
 - **D1 决策（2026-08-23 定稿）**：扩展现有 `dsh-lifecycle` 包（同一安装/升级面、同一 cordis.patch.yml 挂载、单测/README 同源），不新建 `dsh-manager-sessions` 包。
 
 **端点契约（设计定稿）**：
@@ -1251,6 +1357,7 @@ dsh-manager/
 - run 记录与日志落在 `%LOCALAPPDATA%`，仅本用户可读；日志中可能出现工作区路径，属于本机用户自身信息。
 - **M9 会话元数据边界（2026-08-23）**：`/_manager/sessions` 端点只出**只读摘要元数据**（sessionId/title/state/updatedAt/blank/cwd）——title 取自 `session/title` 事件（已归一化），state 由事件流判定（`approval/asked`↔`decided`、`tool/call`(ask_user_question)↔`tool/result` 配对）；**不读消息体/事件内容/凭据**；扩展侧渲染仅用摘要，行点击只打开 Web UI 首页。§12.2 的「不调用 /api、不读页面内容」范围不变。
 - **M12 推送边界（2026-08-26）**：`/_manager/events`（SSE）帧与 `/_manager/sessions` 完全同构（同上摘要字段，无消息内容/文本）；popup 镜像桥（`storage.local.sessionsCache`）只存该摘要 items（≤50 条/端口），**不存储/转发事件正文、工具结果、附件、凭据**；插件侧事件订阅仅用于派生摘要状态（`summarizeSession` 同款判定），任何事件内容都不进入推送/存储面。
+- **M13 launchUrl/token 边界（2026-09-04）**：dsh ≥ 0.1.2 起 `GET /` 受启动令牌认证（§2.1.1 B1），扩展「打开 Web UI」需携带 `?token=` 才能免 401。宿主在 start 日志扫描时捕获完整启动 URL（`dsh web: <url>`，含进程级一次性 token）写入 run 记录 `launchUrl` 字段——**仅限本机存储**（`%LOCALAPPDATA%`，与 dsh 日志同信任域：token 本就被 dsh 打印进日志文件），**仅经 native 通道返回扩展 SW 用于 `chrome.tabs.create`**；**不写入 storage.local、不显示在 popup/logs UI 文本、不进入任何网络请求、不随 adopt/重放跨实例复制**（adopted 记录无 launchUrl）。浏览器标签地址栏可见 token 属预期（本机浏览器访问本机 dsh）。
 
 ---
 
@@ -1271,7 +1378,7 @@ dsh-manager/
 | 用户手工运行了 dsh web（无 run 记录） | status 外部实例发现（§6.6）→ `external`：展示真实端口/URL、可打开 UI；stop/restart 返回 `EXTERNAL_UNMANAGED`，不误杀 |
 | 外部实例使用 `--port 0` | netstat 按 PID 解析实际监听端口后再指纹探测（§6.6 第 4 步） |
 | 发现命令不可用（PowerShell/WMI 受限、netstat 缺失、EPERM） | 静默降级：按无外部实例处理（stopped），绝不影响 start/stop 主流程 |
-| 非 dsh 服务监听端口（误报面） | 指纹探测（`GET /` 前 8KB 含 DeepSeek Harness）不通过 → 不报告 external |
+| 非 dsh 服务监听端口（误报面） | 指纹探测（`GET /manifest.webmanifest` 含 DeepSeek Harness，§6.6 第 5 步）不通过 → 不报告 external |
 | 同时存在多个外部 dsh web | 报告首个实例 + `externalCount`；接管其一后 managed 优先，其余实例待该实例停止后再次发现（§6.7） |
 | adopt 目标已退出 / pid 复用 / 端口漂移 | pid+port 双重匹配不命中 → `EXTERNAL_UNMANAGED`，绝不硬写记录 |
 | adopt 后 stop/restart | 标准 managed 路径（优雅→taskkill）；重启按原 argv 归一化重放，`--port 0` 重放为实际端口 |
@@ -1349,6 +1456,7 @@ M7 状态卡断言、M8 徽标提醒分层渲染（done/waiting/清空恢复）�
 | **M10 颜色语义自定义**（§8.12；M10.1 定稿 2026-08-24） | 用户可按语义角色调整展示色（如「完成」琥珀→绿）：`waiting/working/completed` 三角色预设色板，`settings.colorMap` 全域生效（popup 会话区走语义 CSS 变量、徽标 SW 读 storage）；error 红与字符语义锁定；**定稿色板：进行中=webui 蓝 #5686fe、等待=琥珀黄 #f59e0b、完成=绿 #22c55e**（去 idle、done 并入完成色；徽标完成提醒「!」随定稿改绿）；**顺带统一 working 双载体默认色** | 验收：verify-cdp 改色/恢复默认/撞色提示断言 + 字符语义不回归（**已完成 2026-08-24**） |
 | **M11 项目更名**（§15.1，规划） | 一期：显示品牌（manifest 名、README、popup 品牌名、GitHub 仓库名）；二期：全量更名（native host 协议名 `com.dsh.manager`、注册表键、`%LOCALAPPDATA%\dsh-manager` 状态目录、`DSH_MANAGER_*` 测试钩子、代码/文档标识，含迁移脚本与卸载兼容）；**Chrome Web Store 上架前必须完成**（商店品牌一致性 + 图标重审准备） | 命名拍板（GitHub/npm/商店名冲突核查）→ 一期 → 二期迁移演练；§15.1 |
 | **M12 会话推送（SSE）**（§8.10.1，2026-08-26） | 插件新增 `GET /_manager/events`（SSE：连接即快照 + 语义 diff 增量 upsert/removed + 15s 心跳；事件驱动 `session/event|created|disposed` + `agent/status`；零新依赖）→ 面板 `EventSource` 同源直连（徽标/面板 <100ms，SSE 存活时消除 1Hz 空轮询）→ popup storage 镜像桥（`sessionsCache` + `storage.onChanged`，<500ms）；故障三级回退（SSE → 1Hz 端点 → DOM）；无宿主协议/权限变更 | 插件单测（33→~45）+ `node --check`；verify-cdp 既有断言回归 + SSE 段（合成帧 → 徽标/面板即时更新且无轮询请求）；宿主 smoke 356/0 回归；真实实例 e2e（SSE 200/快照帧/状态流转/断流）；人工：双标签后台 + approval → 徽标「?」<100ms。**M12.1（2026-08-26）plan-review 判定补正**（§8.10 注记：`exit_plan_mode` 工具配对 → waiting）+ 单测 50/50 |
+| **M13 上游 0.1.2 认证兼容 + 就绪信号反转**（§2.1.1、§15.2） | 一期（阻断修复）：宿主两处探测适配启动令牌认证（`httpDshProbe` 指纹端点改 `/manifest.webmanifest`、`httpProbe` 接受 401 为就绪），rc.2/0.1.2 双向兼容；二期（架构改良）：插件写「就绪文件」把存活/端口判定由**宿主轮询探测**反转为**dsh 主动告知**，HTTP 探测降级为无插件时的回退路径 | 一期：smoke 全量回归 + 双版本指纹端点断言（fake-dsh 增 401 变体）；二期：新增协议章节 §6.9 + 插件单测 + smoke 场景 + 真实实例 e2e（升级 0.1.2 后复跑） |
 
 ### 15.1 项目命名与更名规划（M11，2026-08-23 用户提出「名字太朴实」）
 
@@ -1372,6 +1480,27 @@ M7 状态卡断言、M8 徽标提醒分层渲染（done/waiting/清空恢复）�
 
 **决策点**：① 命名**最终定名**（Whalekeeper 已确认为候选（2026-08-23 用户认可），Portwatch/Loopkeeper 保留备选；定名前完成 GitHub/npm/Chrome 商店名冲突核查）② 一期/二期是否分拆 ③ 中文副名「鲸守」是否采用 ④ `dsh-lifecycle` 插件包名是否跟随。
 
+### 15.2 就绪信号反转规划（M13 二期，2026-08-28 用户提出「让 dsh 主动传递状态」）
+
+**动机**：现行存活判定是**宿主从外部猜**——敲 HTTP 门、看响应体有没有品牌字样。这条链路脆在两处：① 判定依据是前端产物内容，上游改一次静态资源或加一道闸门就断（§2.1.1 B1 即为实例）；② 轮询有固有延迟，`start` 需最长 30s 轮询才能确认就绪。
+
+**已有的正确先例**：会话状态早已是推送制——插件 `GET /_manager/events`（SSE，§8.10.1）在 `session/event` 触发时主动推给面板。**唯独「实例是否活着、端口是多少」仍是轮询制**，恰是本次被上游破坏的部分。
+
+**方案（待实施，需先定协议）**：`dsh-lifecycle` 插件在 apply 时把就绪事实写入约定路径的小文件（内容 `{pid, port, startedAt, pluginVersion}`），经 `ctx.effect` 注册清理器——dsh 正常 dispose（含 `appExit` 优雅停机）即删除该文件。宿主改为以该文件为**权威就绪信号**：文件存在且内容新鲜 → `running`；文件消失 → `stopped`；配合 `fs.watch` 可做到状态变化即时可知，无需轮询。
+
+**取舍**
+
+- ✔ 完全不经 HTTP，上游认证/压缩/路由怎么改都无法影响；
+- ✔ 判定依据从「外人的推断」变为「dsh 亲口声明」（插件跑在 host 进程内，pid/port 是第一手事实）；
+- ✔ `start` 就绪反馈由「轮询至敲通」变为「插件写文件的瞬间」；
+- ✖ 依赖插件已安装且为新版——插件未装/旧版时无人写文件，**必须保留 HTTP 探测作为回退**（与 §8.10 sessions 端点同样的降级哲学：富信号不可用即降级，不可用不等于故障）；
+- ✖ 引入新的宿主↔插件文件协议，按本仓约定须先在 §6 新增协议章节（拟 §6.9）并同步两处实现；
+- ✖ 就绪文件位置需与状态目录（§6.5）区分：它由 **dsh 进程**写、宿主读，与宿主自己写的 run 记录不是同一权属，不可混放同一文件。
+
+**已否决的替代**：`externally_connectable` 让 dsh 页面直连扩展 SW。§8.6 已核验外部插件无独立前端构建路径（这正是面板改用 content script 的原因），且现行「SSE → content script → SW」链路已达成同等实时性，为此新开一条通道无收益。
+
+**决策点**：① 就绪文件路径与权属（`$DSH_HOME` 下 vs 宿主 BASE_DIR 下——前者符合「dsh 自己的事实」语义，后者便于宿主权限管理）② 新鲜度判定（mtime 阈值 vs 文件内 `startedAt` + pid 存活复核）③ 是否同时保留 HTTP 探测做交叉校验（双信号不一致时以谁为准）。
+
 注（2026-08-14 用户决定）：**Chrome Web Store 上架与 macOS/Firefox 适配暂缓**；README 已重写为幽默风格并新增「测试环境」章节（CHROMEWEBSTORE.md 保留为将来上架素材）。
 
 ---
@@ -1380,13 +1509,14 @@ M7 状态卡断言、M8 徽标提醒分层渲染（done/waiting/清空恢复）�
 
 | 风险 | 概率 | 影响 | 缓解 |
 |------|------|------|------|
-| dsh CLI 面随版本漂移（flag/路径变化） | 中 | start 失效 | 版本基线校验（§13）；宿主解析链有回退；E2E 覆盖 |
+| dsh CLI 面随版本漂移（flag/路径变化） | 中 | start 失效 | 版本基线校验（§13）；宿主解析链有回退；E2E 覆盖；**上游变更集中登记于 §2.1 台账**，每次版本跳变按耦合面逐行复核 |
+| **上游改动 HTTP 表面导致探测判定失效**（认证/压缩/路由/静态资产） | 中（已发生一次） | 高（start 误报超时、status 卡 starting、外部发现失效） | 已发生实例：0.1.2 启动令牌认证（§2.1.1 B1）。缓解分两层——短期：指纹端点改用上游明示公开的 `/manifest.webmanifest` + 401 视为就绪（M13 一期）；根治：就绪判定改为插件主动写文件、不经 HTTP（M13 二期 §15.2）。约束：探测一律不发 `Accept-Encoding`（§2.1.1 B2） |
 | Windows 下无法优雅停（F7）导致会话尾部丢失 | 中 | 低（F8 兜底） | M2 生命周期插件；文案提示「停止前确认任务完成」 |
 | Chrome 对 native host 缓存/注册表变更需重启浏览器 | 高 | 低 | 安装器验收指引明确写出 |
 | 安全软件拦截 `.cmd` 包装的宿主 | 低 | 高 | 备用方案：pkg 编译为独立 exe（M4 评估） |
 | 用户手工运行了一个 dsh web（无 run 记录） | 低 | 低（已缓解） | M1.1 外部实例发现（§6.6）：status 报告 `external` 状态与真实端口/URL；M1.2 接管（§6.7）后可管理；未接管前 stop/restart 返回 `EXTERNAL_UNMANAGED` 不误杀 |
 | 多浏览器 profile / 多台机器共享 LOCALAPPDATA | 低 | 低 | run 记录含 startedAt 与 pid，冲突自愈 |
-| dsh 插件 API 变化（appExit/webServer 契约） | 低 | 中 | 插件按 dsh 同版本号发布并声明 `peerDependencies`（`"@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.2.0"`，已落实于 `plugin/dsh-lifecycle/package.json`）；宿主对优雅路径失败始终有 taskkill 回退 |
+| dsh 插件 API 变化（appExit/webServer 契约） | 低 | 中 | 插件按 dsh 同版本号发布并声明 `peerDependencies`（`"@deepseek-ai/dsh": ">=0.1.0-rc.6 <0.2.0"`，已落实于 `plugin/dsh-lifecycle/package.json`；**范围语义待修正为 `<0.2.0-0` 以涵盖预发布版，§2.1.1 R2**）；宿主对优雅路径失败始终有 taskkill 回退。**0.1.2-alpha.1 全量核验：插件用到的每个 seam 均存活且形状兼容，零改动（§2.1.1 B3）** |
 | 命令执行闪现终端窗口 | 低（M5.5 起已缓解） | 低（闪窗不阻塞，stdout 仍入日志文件） | M5.5 隐藏控制台载体：dsh 获得从不显示的控制台，子进程继承、不再闪窗（§6.3 第 5 步）；残留风险：wscript 不可用或载体链路失败时实例不可托管（INTERNAL 提示）；若上游修复受限令牌限制可移除载体回归直接 spawn |
 
 ---

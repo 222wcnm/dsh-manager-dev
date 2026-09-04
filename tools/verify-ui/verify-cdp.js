@@ -74,6 +74,52 @@ async function fulfillSessionsMock(page, requestId) {
   });
 }
 
+// M13（2026-09-04）：dsh ≥ 0.1.2 起裸 URL 受浏览器启动令牌认证（GET / 无凭据 → 401 纯文本页，
+// 无 document.title → panel.js 注入指纹不满足 → 面板段全失效）。verify 在导航到 dshUrl 前
+// 先做认证引导：探测 401 → 读宿主 run 记录 launchUrl（含 token，§12.3）或宿主日志最后一条
+// `dsh web: <url>` 行 → 导航兑换签名 cookie（303 → 干净 /）→ 之后所有 dshUrl 访问自动带 cookie。
+// 仅本机同信任域读取（与宿主一致），不写 storage、不转发 token。外部实例（无 run 记录/日志）
+// 无 token 可循 → 返回 false（面板段受限，如实记录）。
+async function ensureDshAuth(page, dshUrl) {
+  try {
+    const head = await fetch(dshUrl, { signal: AbortSignal.timeout(1500) });
+    if (head.ok) return true; // 无需认证（rc.2 或已带 cookie）
+    if (head.status !== 401) return false;
+    let launchUrl = null;
+    if (process.env.LOCALAPPDATA) {
+      try {
+        const rec = JSON.parse(fs.readFileSync(path.join(process.env.LOCALAPPDATA, 'dsh-manager', 'run', 'dsh-web.json'), 'utf8'));
+        if (rec && typeof rec.launchUrl === 'string' && rec.launchUrl.includes('?token=')) launchUrl = rec.launchUrl;
+      } catch (_) { /* 无 run 记录 */ }
+      if (!launchUrl) {
+        try {
+          const raw = fs.readFileSync(path.join(process.env.LOCALAPPDATA, 'dsh-manager', 'logs', 'dsh-web.log'), 'utf8');
+          let m;
+          const re = /dsh\s*web:\s*(https?:\/\/[^\s]+)/gi;
+          while ((m = re.exec(raw)) !== null) if (m[1].includes('?token=')) launchUrl = m[1];
+        } catch (_) { /* 无日志 */ }
+      }
+    }
+    if (!launchUrl) return false;
+    await page.send('Page.navigate', { url: launchUrl }); // token 兑换 303 → / 并落 cookie
+    // 浏览器内校验（Node fetch 无浏览器 cookie，不可用作校验）：轮询 document.title
+    // 出现 DeepSeek Harness 指纹即兑换成功（401 页无 title，SPA 才有）。
+    const deadline = Date.now() + 12000;
+    for (;;) {
+      const ev = await page.send('Runtime.evaluate', {
+        expression: 'document.title',
+        returnByValue: true,
+      });
+      const title = ev && ev.result ? String(ev.result.value || '') : '';
+      if (/deepseek\s*harness/i.test(title)) return true;
+      if (Date.now() >= deadline) return false;
+      await sleep(1000);
+    }
+  } catch (_) {
+    return false;
+  }
+}
+
 function log(...a) { console.log('[verify-cdp]', ...a); }
 function record(name, ok, detail) {
   results.push({ name, ok });
@@ -277,6 +323,11 @@ async function main() {
   // 6) 页面内管理面板（design §8.6）：注入真实 dsh Web UI 页面并断言 shadow 面板
   //    默认 3080（design 默认端口 / run 记录）；用户实例在其它端口时用 VERIFY_DSH_URL 覆盖
   const dshUrl = process.env.VERIFY_DSH_URL || 'http://127.0.0.1:3080/';
+  // M13（2026-09-04）：dsh ≥ 0.1.2 裸 URL 401 → 先认证引导（launchUrl token 兑换 cookie），
+  // 否则面板注入指纹（document.title）不满足、本段全部失效。
+  const authOk = await ensureDshAuth(page, dshUrl);
+  record('M13：dsh 页面认证引导（rc.1 token 兑换）', authOk,
+    authOk ? 'cookie 已就绪，dshUrl 可 200' : '无 launchUrl 可循（外部实例）——面板/SSE/主题面板段将受限');
   log('访问 dsh Web UI 并检查页面内管理面板: ' + dshUrl);
   await page.send('Page.navigate', { url: dshUrl });
   await sleep(8000); // 等 SPA 加载 + content script 注入 + 首轮 status 轮询
@@ -441,7 +492,11 @@ async function main() {
       };
       const probe = await evalInSw(`JSON.stringify({ chrome: typeof chrome, action: typeof (typeof chrome !== 'undefined' && chrome.action), getBadgeText: typeof (typeof chrome !== 'undefined' && chrome.action && chrome.action.getBadgeText), refreshBadge: typeof refreshBadge, storage: typeof (typeof chrome !== 'undefined' && chrome.storage) })`);
       record('徽标：SW 环境探针', true, String(probe.value));
-      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 0, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
+      // M13（2026-09-04）：真实 rc.1 实例 + 认证引导后，面板 SSE 会把真实工作中会话
+      // （verify 自身会话）推给徽标（蓝 n）——本段断言"徽标无会话字符"测的是实例层
+      // 图标（绿点/无点），必须先关 attention 隔离会话层，测完恢复（M8 e2e 段自带
+      // attention:true 设置，恢复行仅为显式对称）。
+      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 0, profile: 'web', autoOpen: true, badgeInterval: 30, attention: false } }); })()`);
       await evalInSw('refreshBadge()');
       // M8.1：实例状态层 = 图标角标（绿点=运行），徽标字符只属于会话状态层 → 无会话信号时 text 空
       const badge0 = await evalInSw(`(async () => JSON.stringify({
@@ -453,7 +508,7 @@ async function main() {
       record('徽标：port 0 经 native status → 角标绿点（实例运行，徽标无会话字符）',
         /"text":""/.test(badgeStr0) && /"icon":"ok"/.test(badgeStr0) && /运行中/.test(badgeStr0),
         'badge=' + badgeStr0 + (badge0.raw ? ' ' + badge0.raw : ''));
-      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 59999, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
+      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 59999, profile: 'web', autoOpen: true, badgeInterval: 30, attention: false } }); })()`);
       await evalInSw('refreshBadge()');
       const badgeNone = await evalInSw(`(async () => JSON.stringify({
         text: await chrome.action.getBadgeText({}),
@@ -462,10 +517,11 @@ async function main() {
       record('徽标：无监听端口 → 角标无点 + 徽标空',
         /"text":""/.test(String(badgeNone.value || '')) && /"icon":"default"/.test(String(badgeNone.value || '')),
         'badge=' + String(badgeNone.value || '') + (badgeNone.raw ? ' ' + badgeNone.raw : ''));
-      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30 } }); })()`);
+      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, attention: false } }); })()`);
       await evalInSw('refreshBadge()');
       const badgeDefault = await evalInSw('chrome.action.getBadgeText({})');
       record('徽标：恢复默认端口后无异常（徽标空）', badgeDefault.value === '', 'badge=' + JSON.stringify(badgeDefault.value) + (badgeDefault.raw ? ' ' + badgeDefault.raw : ''));
+      await evalInSw(`(async () => { await chrome.storage.local.set({ settings: { port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, attention: true } }); })()`); // 显式恢复（M8 e2e 段也会自带 attention:true）
 
       // ---- M8 helpers：轮询替代固定 sleep（缓解隐藏页 1Hz 节流 + SW 多跳竞态，M4）----
       const waitFor = async (fn, timeoutMs) => {
@@ -660,23 +716,14 @@ async function main() {
         log('M8 e2e 端点可用性: ' + epAvailable + '（endpoint=/_manager/sessions @ ' + dshPort + '）');
 
         // —— waiting 链路：端点驱动（mock）或 DOM 注入回退 → attentionMap 条目 + 黄「?」——
+        // M12 后适配（2026-09-04）：面板在 SSE 存活时优先实时链路（attTick 纯内存补推，
+        // 不轮询 /_manager/sessions）——端点 mock 在插件可用环境永不命中（mockHits=0
+        // 实证）。waiting→徽标「?」链路由下方 M12 段合成帧断言覆盖（upsert waiting →
+        // 「?」即时切换 + 时序回归段）；DOM 回退路径（!epAvailable）继续覆盖插件不可用
+        // 场景。此处如实记录（非失败）。
         if (epAvailable) {
-          await page.send('Fetch.enable', { patterns: [{ urlPattern: '*_manager/sessions', requestStage: 'Request' }] });
-          sessionsMockProvider = () => ([
-            { sessionId: 'm-waiting', state: 'waiting', updatedAt: 1700000000000 },
-            { sessionId: 'm-working', state: 'working', updatedAt: 1700000000001 },
-          ]);
-          const wAttOk = await waitFor(() => attEntryKind('waiting'), 8000);
-          const wBadgeOk = await waitFor(async () => {
-            const j = await getBadgeJson();
-            return badgeHas(String(j.value || ''), '?', /#f59e0b|f59e0b|245,\s*158,\s*11/i);
-          }, 4000);
-          const bAtt = await getBadgeJson();
-          record('M8：e2e 后台+等待信号 → 黄「?」（端点驱动，与 popup 会话区同源；attentionMap 条目为链路证据）',
-            wAttOk && wBadgeOk,
-            'badge=' + String(bAtt.value || '') + ' base=' + JSON.stringify(base) + (bAtt.raw ? ' ' + bAtt.raw : ''));
-          sessionsMockProvider = null;
-          await page.send('Fetch.disable');
+          record('M8：e2e 后台+等待信号 → 黄「?」——SSE 存活端点 mock 不可达（M12 适配，由 M12 合成帧段覆盖）',
+            true, 'epAvailable=true 面板走 SSE 实时链路（attTick 不轮询端点）；M12 段「upsert waiting → 徽标?」覆盖等价链路');
         } else {
           await page.send('Runtime.evaluate', {
             expression: `(() => {
@@ -725,37 +772,11 @@ async function main() {
           record('M8：e2e 工作→完成（done）链路——基线存在真实工作中会话，本段如实记录（非失败）',
             true, 'ongoing=' + base2.ongoing + '（真实 dsh 会话仍在运行；done 链路待空闲环境覆盖）');
         } else if (epAvailable) {
-          // 端点驱动：mock 先返回工作中项 → 随后空（工作→空闲稳定 1.2s 事件沿 → 绿!）
-          await page.send('Fetch.enable', { patterns: [{ urlPattern: '*_manager/sessions', requestStage: 'Request' }] });
-          let phase = 0;
-          sessionsMockProvider = () => {
-            phase += 1;
-            return phase <= 2
-              ? [{ sessionId: 'm-done', state: 'working', updatedAt: 1700000001000 }]
-              : [];
-          };
-          const dAttOk = await waitFor(() => attEntryKind('done'), 20000);
-          const dBadgeOk = await waitFor(async () => {
-            const j = await getBadgeJson();
-            return badgeHas(String(j.value || ''), '!', /#22c55e|22c55e|34,\s*197,\s*94/i);
-          }, 6000);
-          const bDone2 = await getBadgeJson();
-          let doneDiag = '';
-          try {
-            const rd = await page.send('Runtime.evaluate', {
-              expression: `(() => JSON.stringify({
-                hidden: document.hidden,
-                res: performance.getEntriesByType('resource').filter((e) => /_manager\\/sessions/.test(e.name)).map((e) => Math.round(e.duration)),
-              }))()`,
-              returnByValue: true,
-            });
-            doneDiag = ' diag=' + String(rd && rd.result && rd.result.value || '');
-          } catch (_) { /* 诊断非关键 */ }
-          record('M8：e2e 工作→完成 → 绿「!」（端点驱动；attentionMap 有 done 条目为链路证据）',
-            dAttOk && dBadgeOk,
-            'badge=' + String(bDone2.value || '') + ' base=' + JSON.stringify(base2) + ' mockHits=' + sessionsMockHits + doneDiag + (bDone2.raw ? ' ' + bDone2.raw : ''));
-          sessionsMockProvider = null;
-          await page.send('Fetch.disable');
+          // M12 后适配（2026-09-04）：面板在 SSE 存活时不轮询端点，端点 mock 永不命中
+          // （mockHits=0 实证）——done「绿!」链路由下方 M12 段新增合成帧断言覆盖
+          // （working 快照 → 空快照 → 稳定空态 → done-fired）。此处如实记录（非失败）。
+          record('M8：e2e 工作→完成 → 绿「!」——SSE 存活端点 mock 不可达（M12 适配，由 M12 段 done 合成帧断言覆盖）',
+            true, 'epAvailable=true 面板走 SSE 实时链路（attTick 不轮询端点）；M12 段「working→空→绿!」覆盖等价链路');
         } else {
           await page.send('Runtime.evaluate', {
             expression: `(() => {
@@ -977,6 +998,22 @@ async function main() {
         const cleared = await waitForM12(async () => (await badgeTextM12()) === '', 6000);
         record('M12：removed/清空快照 → 徽标恢复安静',
           cleared, 'badge=' + JSON.stringify(await badgeTextM12()) + ' kinds=' + JSON.stringify(await attKindsM12()));
+
+        // 4b) done 链路（M13 适配补位，2026-09-04）：M8 端点 mock 在 SSE 存活环境
+        //     不可达（面板 attTick 不轮询端点，mockHits=0 实证）——done「绿!」改由
+        //     合成帧确定性覆盖：working 快照 → 空快照（状态机稳定 1.2s 空态 →
+        //     done-fired → 绿!），与 M8 DOM 回退路径（插件不可用环境）互补。
+        await dispatchSseFrame({ event: 'snapshot', data: { ok: true, items: [
+          { sessionId: 'm12-d', state: 'working', updatedAt: 1700000002000 },
+        ] } });
+        const dWk = await waitForM12(async () => (await attKindsM12()).includes('working'), 4000);
+        const dWkBadge = await waitForM12(async () => (await badgeTextM12()) === '1', 4000);
+        await dispatchSseFrame({ event: 'snapshot', data: { ok: true, items: [] } });
+        const dDone = await waitForM12(async () => (await attKindsM12()).includes('done'), 12000);
+        const dDoneBadge = await waitForM12(async () => (await badgeTextM12()) === '!', 6000);
+        record('M12：working→空快照（稳定空态）→ 绿「!」done 链路（合成帧；M13 补 M8 端点 mock 覆盖缺口）',
+          dWk && dWkBadge && dDone && dDoneBadge,
+          'badge=' + JSON.stringify(await badgeTextM12()) + ' kinds=' + JSON.stringify(await attKindsM12()));
 
         // 5) 时序回归（2026-08-26 用户实测暴露）：「可见期帧到达 → 后切后台」——
         //    面板在可见期只记账不 attApply（用户在看，无需提醒）；切后台的瞬间必须由
@@ -1540,6 +1577,33 @@ async function main() {
     JSON.stringify(v.error));
   record('M7：stopped 状态词「已停止」+ 灰点',
     okv(v.stopped) && v.stopped.word === '已停止' && v.stopped.dot === 'dot dot-stopped', JSON.stringify(v.stopped));
+
+  // M13（§2.1.1 B1）：openWebUI 优先用 detail.launchUrl（含 token，深链 hash 保留），
+  // 无 launchUrl（external/adopted/旧记录）回退裸 URL。stub chrome.tabs.query/create
+  // 捕获新建标签 URL，不真实开标签。
+  const m13Open = await evalPage(`(async () => {
+    const origQuery = chrome.tabs.query;
+    const origCreate = chrome.tabs.create;
+    chrome.tabs.query = () => Promise.resolve([]);
+    let captured = null;
+    chrome.tabs.create = (opts) => { captured = opts.url; return Promise.resolve({ id: 1 }); };
+    detail = { port: 3080, launchUrl: 'http://127.0.0.1:3080/?token=abc123' };
+    await openWebUI('/#/chat/xyz');
+    const withLaunch = captured;
+    captured = null;
+    detail = { port: 3080 };
+    await openWebUI('/');
+    const bare = captured;
+    chrome.tabs.query = origQuery;
+    chrome.tabs.create = origCreate;
+    return JSON.stringify({ withLaunch, bare });
+  })()`);
+  let m13o = {};
+  try { m13o = JSON.parse(m13Open); } catch (_) { /* 保持默认 */ }
+  record('M13：openWebUI 有 launchUrl 时新建标签用 launchUrl（深链 hash 保留）',
+    m13o.withLaunch === 'http://127.0.0.1:3080/?token=abc123/#/chat/xyz', JSON.stringify(m13o));
+  record('M13：openWebUI 无 launchUrl 时回退裸 URL',
+    m13o.bare === 'http://127.0.0.1:3080', JSON.stringify(m13o));
 
   // 深/浅状态卡背景：深色 bg-module-platform（#1e2025 rgb(30, 32, 37)），浅色=bluish-60（#f5f6f7）
   await setPopupTheme('dark');

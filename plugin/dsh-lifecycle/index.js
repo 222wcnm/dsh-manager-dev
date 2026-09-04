@@ -56,6 +56,17 @@ function allow(req) {
   return true
 }
 
+// Session 事件数组的版本兼容读取（§2.1.1 B5）：
+// dsh < 0.1.2（rc.2 及更早）的 live Session 暴露 `.events` 数组属性；
+// dsh >= 0.1.2（alpha.4 起，rc.1 确认）移除该属性，改为 `snapshotEvents()` 方法。
+// 两者都缺时回退空数组（静默降级，绝不让单条会话拖垮端点）。
+function sessionEvents(session) {
+  if (session == null || typeof session !== 'object') return []
+  if (Array.isArray(session.events)) return session.events
+  if (typeof session.snapshotEvents === 'function') return session.snapshotEvents()
+  return []
+}
+
 // Fold the latest session title out of the event stream. The `session/title`
 // event is appended by the official dsh-session-title service and its payload
 // is already normalized; this plugin reads the event stream directly instead
@@ -151,7 +162,7 @@ function foldChildLabel(events) {
 // Derive the four-state session summary the extension renders
 // (docs/design.md §8.10): waiting > working > completed > idle.
 function summarizeSession(session, agents, childLabelBy) {
-  const events = session.events ?? []
+  const events = sessionEvents(session)
   const running = agents?.get?.(session.id)?.status === 'running'
   let state = 'idle'
   if (hasPendingInteraction(events)) state = 'waiting'
@@ -192,7 +203,7 @@ function buildChildLabelMap(live) {
   for (const child of live) {
     if (!child || typeof child !== 'object') continue
     if (child.header?.origin !== 'subagent') continue
-    const label = foldChildLabel(child.events ?? [])
+    const label = foldChildLabel(sessionEvents(child))
     if (label !== undefined) childLabelBy.set(child.id, label)
   }
   return childLabelBy
