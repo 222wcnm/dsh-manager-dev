@@ -138,6 +138,38 @@
   `opacity:1`），spinner 全程全亮；design §8.2 行为规范新增第 12 条按钮状态矩阵。
 
 ### Fixed
+- **M13.2 popup 月亮主题 cube「未选中无边框」（2026-09-06 用户实机反馈，像素级定位）**：
+  现象：浅色主题下设置面板「外观模式」四个 theme-cube 中，仅「深色」（月亮）未选中时
+  边框不可见、图标偏浅灰；点选月亮（整 popup 切深色）后恢复——深色主题下无异常。
+  根因：popup.css 深色令牌块双选择器 `body[data-ds-dark-theme],
+  [data-theme="dark"]` 的第二支**未限定标签**，直接命中月亮按钮自身的
+  `data-theme="dark"`（popup.html L201），整套深色 alias 令牌（border-l1=白 6%、
+  label-secondary=rgb(173,178,184) 等）**局部泄漏到该按钮**（CSS 自定义属性继承：
+  元素自身声明优先于 :root 继承值）——边框白叠浅灰卡片（不可见）、图标变浅灰；
+  其余三个 cube 不匹配该选择器故正常。点选月亮后 body 整体切深色，局部令牌 ==
+  全局令牌，差异消失，故「点选后恢复正常」。深色主题下两套值恒同，无异常。
+  引入考古：M11.1（0ecc756，2026-08-25）把 V6 沙箱 CSS 搬入 popup.css 时，沙箱的
+  `[data-theme="dark-preview"]`（挂 documentElement，不撞按钮）被改为 `dark` 所致；
+  M6~M10 的 popup.css 只有 `body[data-ds-dark-theme]`（无此 bug）。
+  像素证据：用户截图实测月亮 cube top/left/right 边框行 = #F5F6F7（与卡片背景零差异，
+  物理无边框线），monitor/sun = #EBECED（l1 细线存在）；月亮图标最暗像素 **#ADB2B8**
+  = 深色块 `--dsw-alias-label-secondary: rgb(173,178,184)` 逐位吻合，monitor/sun =
+  #61666B（浅色 bluish-700）。
+  修复（popup.css 两处，规格值零改动）：L74-75 与 L748 删去游离的 `[data-theme="dark"]`
+  分支，只留 `body[data-ds-dark-theme]`（theme.js 唯一入口；logs.css 与 dsw-tokens-dark.css
+  存档本就只有 body 选择器）；附防再犯注释。
+  验收：独立复现页（真实 popup.css + 真实图标）修复前月亮四边 #F5F6F7/图标 #ADB2B8、
+  修复后 top/bottom/left = **#EBECED 与 monitor/sun 逐位一致**、图标恢复 **#61666B**；
+  像素 diff 证实修复前后整体差异 0.03% 且全部集中在月亮 cube（零波及其他元素）。
+  verify-cdp 新增 1 条防回归断言（浅色下未选中三 cube 的 computed color 与
+  `--dsw-alias-border-l1` 计算值一致，防令牌作用域泄漏复发）并实跑全量回归：
+  **PASS 104 / FAIL 4**——新增断言与全部主题段断言通过（月亮 color/borderL1 与
+  太阳/显示器逐位一致）；4 条 FAIL 均为 M11 已读/倒计时段**环境干扰**（实测时
+  真实环境存在 2 个活跃「进行中」会话——含验证会话自身——真实会话数据顶掉 mock
+  的「已完成」行所致；2026-09-04 同套件 107/0 全过时无活跃会话；与本次修复无关，
+  属已知 flaky 遗留同类，见 AGENTS.md）。遗留：design §8.7.5
+  仍记载 M6 数值（border-l2/radius 16/height 32/选中 bg-module-platform+bluish-400），
+  与 M11.1 V6 实际（l1/8px/28px/选中 bg-active+l2）为未回写漂移，另行决策。
 - **M13.1 子代理感知修复（2026-09-04，dsh 源码核验）**：`subagent/start|end` 只经事件
   总线发布、不写入父会话 session log（0.1.1-rc.2/0.1.2-rc.1 源码核验，lifecycle.ts
   observeRun）——旧实现从 `sessionEvents()` 配对在真实环境恒空，popup「会话」区不显示

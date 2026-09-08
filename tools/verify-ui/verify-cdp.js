@@ -1481,6 +1481,34 @@ async function main() {
     !!(g2 && g2.after.theme === 'dark' && g2.after.tab === '0'),
     gridSelL || 'evaluate failed');
 
+  // -- 外观行防回归（M13.2）：浅色下未选中 cube 令牌一致性——月亮按钮 data-theme="dark"
+  //    曾被深色令牌块的游离选择器 [data-theme="dark"] 命中，整套深色令牌局部泄漏到该按钮
+  //    （边框变白不可见、图标变浅灰）。断言三个未选中 cube 的 color 与
+  //    --dsw-alias-border-l1 计算值完全一致，防令牌作用域泄漏复发。
+  await setPopupTheme('light');
+  await gotoPopup();
+  let cubeTokensL = null;
+  try {
+    cubeTokensL = await evalPage(`(async () => {
+      document.getElementById('btn-settings').click();
+      await new Promise((r) => setTimeout(r, 300));
+      const cubes = Array.from(document.querySelectorAll('.theme-cube'));
+      return JSON.stringify(cubes.map((c) => ({
+        theme: c.getAttribute('data-theme'),
+        selected: c.classList.contains('selected'),
+        color: getComputedStyle(c).color,
+        borderL1: getComputedStyle(c).getPropertyValue('--dsw-alias-border-l1').trim(),
+      })));
+    })()`);
+  } catch (_) { /* 保持 null */ }
+  const ctL = cubeTokensL ? JSON.parse(cubeTokensL) : null;
+  const ctUnsel = ctL ? ctL.filter((c) => !c.selected) : [];
+  record('主题：浅色下未选中 cube 令牌一致（月亮无深色令牌泄漏）',
+    !!(ctUnsel.length === 3 &&
+       ctUnsel.every((c) => c.color === 'rgb(97, 102, 107)') &&
+       ctUnsel.every((c) => c.borderL1 === ctUnsel[0].borderL1 && c.borderL1 === 'rgba(0, 0, 0, 0.04)')),
+    cubeTokensL || 'evaluate failed');
+
   // -- follow-system：CDP Emulation 翻转 prefers-color-scheme 断言跟随
   await setPopupTheme('follow-system');
   await gotoPopup();

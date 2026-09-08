@@ -44,7 +44,7 @@ node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单�
 powershell -ExecutionPolicy Bypass -File native-host\install.ps1 -DryRun   # 安装预演（Windows）
 sh native-host/install.sh --dry-run                                          # 安装预演（Linux/macOS）
 powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E  # WSL Linux 冒烟 + 真实安装 E2E
-node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 107 断言
+node tools/verify-ui/verify-cdp.js                   # 扩展 UI 自动验收 108 断言
 node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome-devtools-mcp，需沙箱外）
 ```
 
@@ -61,7 +61,7 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
 | `e2e-m9-manager.js` | 7/7 | 真实 profile 插件装配；插件未升级时 SKIP；需 danger-full-access |
 | `e2e-rc1-isolated.js` | 9/9 | 临时前缀 rc.1（缺省 `%TEMP%\dsh-rc1-prefix`，`DSH_MANAGER_NPM_PREFIX` 可覆盖）+ 本地插件方式 B |
 | `lifecycle.test.js` | 58 项 | `node --test` |
-| `verify-cdp.js` | 107 断言 | headless Chrome（沙箱拦 mojo 管道时需 danger-full-access 侧挂）；默认 dsh URL 3080（`VERIFY_DSH_URL` 覆盖） |
+| `verify-cdp.js` | 108 断言 | headless Chrome（沙箱拦 mojo 管道时需 danger-full-access 侧挂）；默认 dsh URL 3080（`VERIFY_DSH_URL` 覆盖） |
 
 > **verify-cdp 覆盖（M13 起）**：真实 rc.1 实例认证引导（探测 401 → 读 run 记录
 > launchUrl → token 兑换 cookie）；popup/logs/面板注入与展开；面板停止两步确认态；
@@ -104,6 +104,12 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
   从会话事件流配对在真实环境恒空、popup 不显示子代理行。修复：插件订阅总线事件 +
   `header.parentSession` 维护活跃子代理索引（runId 配对权威），保留日志配对与 live 扫描
   兜底；徽标口径落实（`completed+hasActiveChildren` 计入蓝 n）。详见 CHANGELOG M13.1。
+- **M13.2 popup 月亮主题 cube 边框修复（2026-09-06，verify-cdp 104 PASS / 4 FAIL
+  环境干扰）**：深色令牌块游离选择器 `[data-theme="dark"]` 命中月亮按钮自身
+  `data-theme="dark"`，整套深色令牌局部泄漏——浅色下月亮 cube 无边框 + 图标浅灰。
+  修复：popup.css 两处选择器收窄为 `body[data-ds-dark-theme]`（规格值零改动）；
+  verify-cdp 新增浅色未选中 cube 令牌一致断言（107→108）。遗留：design §8.7.5
+  与 V6 实际数值（l1/8px/28px）漂移待决策。详见 CHANGELOG M13.2。
 - **M13 二期（待办）**：插件写「就绪文件」，存活/端口判定由宿主轮询反转为 dsh 主动
   告知（§15.2，需先定协议：文件路径/新鲜度/双信号；HTTP 探测保留为无插件回退）。
 - **已知遗留**：
