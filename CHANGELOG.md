@@ -138,6 +138,17 @@
   `opacity:1`），spinner 全程全亮；design §8.2 行为规范新增第 12 条按钮状态矩阵。
 
 ### Fixed
+- **M13.1 子代理感知修复（2026-09-04，dsh 源码核验）**：`subagent/start|end` 只经事件
+  总线发布、不写入父会话 session log（0.1.1-rc.2/0.1.2-rc.1 源码核验，lifecycle.ts
+  observeRun）——旧实现从 `sessionEvents()` 配对在真实环境恒空，popup「会话」区不显示
+  子代理行（单测用 mock 事件数组故全绿，M11 起从未在真实 dsh 上生效）。修复：插件订阅
+  `subagent/start|end` 总线事件 + `session/created` 的 `header.parentSession` 维护活跃
+  子代理索引（runId 配对权威），保留会话日志配对与 live 扫描（origin='subagent' +
+  parentSession 匹配 + agent running）做兼容/冷恢复兜底；无 turn/end 但有活跃子代理的
+  父会话归入「进行中」（防 idle 隐藏整行）；SSE 推送同步（start/end 触发父会话 upsert）。
+  徽标口径落实：`completed+hasActiveChildren`（已停止）计入蓝 n（面板端点/SSE 两路计数
+  同改）。顺带维护性优化：插件路由样板抽 `routeGuard`、归档判定抽 `archivedSessionIds`。
+  验收：插件单测 **58/58**（新增 6 项）；`node --check` 全过。
 - **M9 会话行交互误导（2026-08-23 用户实机反馈）**：会话区行的「点击 → 打开该实例 Web UI」
   被实测误导——Web UI **无 URL 会话深链**（打开后恢复 localStorage 的「上次选中会话」），
   点击 A 行首屏却展示另一会话（点 B 进 A）；**行为修订：会话行纯展示**（移除

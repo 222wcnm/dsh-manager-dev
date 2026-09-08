@@ -611,6 +611,113 @@ test('sessions defaults: completed childRuns empty when every start is paired', 
   assert.deepEqual(item.childRuns, [])
 })
 
+// ---- M13.1 修复：子代理感知以事件总线为权威源（真实 dsh 形状）----
+// dsh 0.1.1-rc.2 / 0.1.2-rc.1 源码核验：subagent/start|end 只经事件总线发布、
+// 不写入父会话 session log（见 index.js activeChildRuns 注记）——旧实现从
+// sessionEvents() 配对在真实环境恒空、popup 不显示子代理行。以下测试模拟真实
+// dsh：父会话事件流为空，活跃子代理仅经 session/created（header.parentSession）
+// + subagent/start|end 总线事件登记。
+
+test('sessions: active children from bus events (real dsh shape, empty session log)', async () => {
+  const sessions = [
+    makeSession({ id: 's-parent', events: [ev('turn/end')] }),
+    makeSession({
+      id: 'child-1',
+      header: { origin: 'subagent', parentSession: 's-parent' },
+      events: [ev('subagent/descriptor', { label: '检索代码' })],
+    }),
+  ]
+  const { ctx, routes, emit } = makeCtxWithSessions({ sessions })
+  // 模拟 dsh：子会话创建（header.parentSession 登记）+ subagent/start 总线事件
+  emit('session/created', sessions[1])
+  emit('subagent/start', { runId: 'run-1', id: 'child-1', provider: 'subagent', local: true })
+  const { body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  const [item] = JSON.parse(body).items
+  assert.equal(item.sessionId, 's-parent')
+  assert.equal(item.hasActiveChildren, true)
+  assert.deepEqual(item.childRuns, [{ childId: 'child-1', label: '检索代码' }])
+})
+
+test('sessions: subagent/end removes the active child from the bus index', async () => {
+  const sessions = [
+    makeSession({ id: 's-parent', events: [ev('turn/end')] }),
+    makeSession({ id: 'child-1', header: { origin: 'subagent', parentSession: 's-parent' } }),
+  ]
+  const { ctx, routes, emit } = makeCtxWithSessions({ sessions })
+  emit('session/created', sessions[1])
+  emit('subagent/start', { runId: 'run-1', id: 'child-1', provider: 'subagent', local: true })
+  emit('subagent/end', { runId: 'run-1', id: 'child-1', stopReason: 'completed' })
+  const { body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  const [item] = JSON.parse(body).items
+  assert.equal(item.hasActiveChildren, false)
+  assert.deepEqual(item.childRuns, [])
+})
+
+test('sessions: cold-start fallback scans live running subagent children', async () => {
+  // 插件热重载后总线索引为空（无 session/created / subagent/start 事件），
+  // 仅靠 live 扫描兜底：origin='subagent' + parentSession 匹配 + agent running。
+  const sessions = [
+    makeSession({ id: 's-parent', events: [ev('turn/end')] }),
+    makeSession({ id: 'child-1', header: { origin: 'subagent', parentSession: 's-parent' } }),
+  ]
+  const agents = { 'child-1': { status: 'running' } }
+  const { ctx, routes } = makeCtxWithSessions({ sessions, agents })
+  const { body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  const [item] = JSON.parse(body).items
+  assert.equal(item.hasActiveChildren, true)
+  assert.deepEqual(item.childRuns, [{ childId: 'child-1' }])
+})
+
+test('sessions: cold-start fallback ignores settled (non-running) subagent children', async () => {
+  const sessions = [
+    makeSession({ id: 's-parent', events: [ev('turn/end')] }),
+    makeSession({ id: 'child-1', header: { origin: 'subagent', parentSession: 's-parent' } }),
+  ]
+  const agents = { 'child-1': { status: 'idle' } }
+  const { ctx, routes } = makeCtxWithSessions({ sessions, agents })
+  const { body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  const [item] = JSON.parse(body).items
+  assert.equal(item.hasActiveChildren, false)
+  assert.deepEqual(item.childRuns, [])
+})
+
+test('sessions: a parent without turn/end but with active children is working (not hidden)', async () => {
+  // M13.1：冷恢复/未结束 turn 的父会话 + 活跃子代理 → state 归入 working
+  // （「有子代理运行归入进行中」定稿；popup 按 idle 隐藏整行，working 恒显）。
+  const parent = makeSession({ id: 's-parent', events: [] })
+  const child = makeSession({
+    id: 'child-1',
+    header: { origin: 'subagent', parentSession: 's-parent' },
+    events: [ev('subagent/descriptor', { label: '子任务' })],
+  })
+  const { ctx, routes, emit } = makeCtxWithSessions({ sessions: [parent, child] })
+  emit('session/created', child)
+  emit('subagent/start', { runId: 'run-1', id: 'child-1', provider: 'subagent', local: true })
+  const { body } = await sessionsPayload(ctx, routes, makeRequest({ method: 'GET' }))
+  const [item] = JSON.parse(body).items
+  assert.equal(item.state, 'working')
+  assert.equal(item.hasActiveChildren, true)
+})
+
+test('events: subagent/start pushes an upsert with childRuns (bus event)', async () => {
+  const parent = makeSession({ id: 's-parent', events: [ev('turn/end')] })
+  const child = makeSession({
+    id: 'child-1',
+    header: { origin: 'subagent', parentSession: 's-parent' },
+    events: [ev('subagent/descriptor', { label: '子任务' })],
+  })
+  const { ctx, routes, emit } = makeCtxWithSessions({ sessions: [parent, child] })
+  const res = await eventsConnect(ctx, routes, makeRequest({ method: 'GET' }))
+  emit('session/created', child)
+  emit('subagent/start', { runId: 'run-1', id: 'child-1', provider: 'subagent', local: true })
+  await sleep(80)
+  const upserts = parseSse(res.text).filter((f) => f.event === 'upsert')
+  assert.equal(upserts.length, 1)
+  assert.equal(upserts[0].data.session.sessionId, 's-parent')
+  assert.equal(upserts[0].data.session.hasActiveChildren, true)
+  assert.deepEqual(upserts[0].data.session.childRuns, [{ childId: 'child-1', label: '子任务' }])
+})
+
 // ---- M12: GET /_manager/events (SSE event-driven push surface) ----
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))

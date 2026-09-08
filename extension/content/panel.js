@@ -554,8 +554,10 @@
       let waiting = 0;
       for (const it of data.items) {
         if (!it || typeof it !== 'object') continue;
-        if (it.state === 'working') working += 1;
-        else if (it.state === 'waiting') waiting += 1;
+        if (it.state === 'waiting') waiting += 1;
+        // M13.1 口径（design §8.10 M11 定稿）：有子代理运行的会话归入「进行中」
+        // （蓝 n）——父会话可能已 completed（「已停止」）但子代理仍在跑。
+        else if (it.state === 'working' || it.hasActiveChildren === true) working += 1;
       }
       return { working, waiting };
     } catch (_) { /* 端点不可达/被拦截：回退 */ return null; }
@@ -642,8 +644,9 @@
     let waiting = 0;
     for (const it of sseMap.values()) {
       if (!it || typeof it !== 'object') continue;
-      if (it.state === 'working') working += 1;
-      else if (it.state === 'waiting') waiting += 1;
+      if (it.state === 'waiting') waiting += 1;
+      // M13.1 口径（design §8.10 M11 定稿）：有子代理运行的会话归入「进行中」（蓝 n）
+      else if (it.state === 'working' || it.hasActiveChildren === true) working += 1;
     }
     return { working, waiting };
   }

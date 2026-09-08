@@ -40,7 +40,7 @@ node native-host/test/smoke.js                       # 冒烟测试 29 场景（
 node native-host/test/smoke-real.js                  # 真实 dsh 集成（需 DSH_MANAGER_NPM_PREFIX=%APPDATA%\npm）
 node native-host/test/e2e-m9-manager.js              # M9 真实实例 e2e（真实 profile 插件装配；需 danger-full-access）
 node native-host/test/e2e-rc1-isolated.js            # M13 真实 rc.1 隔离 e2e（临时前缀；见下）
-node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（52 项）
+node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（58 项）
 powershell -ExecutionPolicy Bypass -File native-host\install.ps1 -DryRun   # 安装预演（Windows）
 sh native-host/install.sh --dry-run                                          # 安装预演（Linux/macOS）
 powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E  # WSL Linux 冒烟 + 真实安装 E2E
@@ -60,7 +60,7 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
 | `smoke-real.js` | 真实 dsh 全链路（start→status→stop + `--port 0`） | `DSH_MANAGER_NPM_PREFIX=%APPDATA%\npm` |
 | `e2e-m9-manager.js` | 7/7 | 真实 profile 插件装配；插件未升级时 SKIP；需 danger-full-access |
 | `e2e-rc1-isolated.js` | 9/9 | 临时前缀 rc.1（缺省 `%TEMP%\dsh-rc1-prefix`，`DSH_MANAGER_NPM_PREFIX` 可覆盖）+ 本地插件方式 B |
-| `lifecycle.test.js` | 52 项 | `node --test` |
+| `lifecycle.test.js` | 58 项 | `node --test` |
 | `verify-cdp.js` | 107 断言 | headless Chrome（沙箱拦 mojo 管道时需 danger-full-access 侧挂）；默认 dsh URL 3080（`VERIFY_DSH_URL` 覆盖） |
 
 > **verify-cdp 覆盖（M13 起）**：真实 rc.1 实例认证引导（探测 401 → 读 run 记录
@@ -99,6 +99,11 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
   `>=0.1.0-rc.6 <0.2.0-0`。验证：插件单测 52/52；smoke 372 PASS / FAIL 0 / SKIP 1；
   verify-cdp 107 PASS / FAIL 0；e2e-rc1-isolated 9/9；smoke-real 全链路 +
   e2e-m9-manager 7/7 真机回归。详见 CHANGELOG M13 条目与 design §2.1.1。
+- **M13.1 子代理感知修复（2026-09-04，插件单测 58/58）**：`subagent/start|end` 只经
+  事件总线发布、不写入父会话 session log（dsh 0.1.1-rc.2/0.1.2-rc.1 源码核验）——旧实现
+  从会话事件流配对在真实环境恒空、popup 不显示子代理行。修复：插件订阅总线事件 +
+  `header.parentSession` 维护活跃子代理索引（runId 配对权威），保留日志配对与 live 扫描
+  兜底；徽标口径落实（`completed+hasActiveChildren` 计入蓝 n）。详见 CHANGELOG M13.1。
 - **M13 二期（待办）**：插件写「就绪文件」，存活/端口判定由宿主轮询反转为 dsh 主动
   告知（§15.2，需先定协议：文件路径/新鲜度/双信号；HTTP 探测保留为无插件回退）。
 - **已知遗留**：

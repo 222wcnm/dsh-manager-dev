@@ -56,6 +56,31 @@ function allow(req) {
   return true
 }
 
+// Route boilerplate shared by every endpoint: fence first, then the method
+// check (405 with Allow). Returns false when the request was answered and the
+// handler must return immediately.
+function routeGuard(req, res, method) {
+  if (!allow(req)) {
+    res.writeHead(403)
+    res.end()
+    return false
+  }
+  if (req.method !== method) {
+    res.writeHead(405, { allow: method })
+    res.end()
+    return false
+  }
+  return true
+}
+
+// Archived-session id set, or null when the registry is absent (no filtering).
+function archivedSessionIds(ctx) {
+  const workspaceRegistry = ctx.get('workspaceRegistry')
+  return (workspaceRegistry && Array.isArray(workspaceRegistry.archivedSessionIds))
+    ? new Set(workspaceRegistry.archivedSessionIds)
+    : null
+}
+
 // Session 事件数组的版本兼容读取（§2.1.1 B5）：
 // dsh < 0.1.2（rc.2 及更早）的 live Session 暴露 `.events` 数组属性；
 // dsh >= 0.1.2（alpha.4 起，rc.1 确认）移除该属性，改为 `snapshotEvents()` 方法。
@@ -147,6 +172,69 @@ function activeChildIds(events) {
   return [...ids]
 }
 
+// ---------------------------------------------------------------------------
+// 子代理活跃索引（M13.1 修复，2026-09-04；design §8.10 契约注记）
+// ---------------------------------------------------------------------------
+// dsh 0.1.1-rc.2 与 0.1.2-rc.1 源码核验（packages/subagent/subagent/src/
+// lifecycle.ts observeRun）：`subagent/start|end` 只经事件总线（scoped
+// dispatch）发布，**从不 append 进父会话的 session log**（全库仅
+// `subagent/descriptor`/`sandbox/mode`/`approval/policy` 等写入子会话 log）。
+// 旧实现从 `sessionEvents()` 配对 → 生产环境 childRuns 恒空、popup 不显示
+// 子代理行（单测用 mock events 数组所以全绿）。修复：以事件总线为权威源，
+// 父子关系经 `session/created` 的 `header.parentSession` 反查（sdk/server.ts
+// 同款模式），并保留会话日志配对 + live 扫描做兼容/冷恢复兜底。
+//
+// 三路信号合并（按 childId 去重）：
+//   ① 事件总线索引（activeByParent：父 → runId → childId）——真实 dsh 权威源；
+//   ② 会话日志配对（activeChildIds）——旧版 dsh / 测试桩兼容；
+//   ③ live 扫描：插件热重载后索引为空时，origin='subagent' 且父会话匹配且
+//      子 agent status==='running' 的会话视为活跃（对齐 dsh list-children 的
+//      activity 判定，control.ts）。
+function liveParentOf(sessions, childId) {
+  for (const s of sessions?.list?.() ?? []) {
+    if (s?.id === childId && s.header?.origin === 'subagent' && typeof s.header.parentSession === 'string') {
+      return s.header.parentSession
+    }
+  }
+  return undefined
+}
+
+function removeChildFromActive(activeByParent, parentId, childId) {
+  const byRun = activeByParent.get(parentId)
+  if (byRun === undefined) return
+  for (const [runId, cid] of byRun) {
+    if (cid === childId) byRun.delete(runId)
+  }
+  if (byRun.size === 0) activeByParent.delete(parentId)
+}
+
+function activeChildRuns(parentId, sessions, agents, childLabelBy, activeByParent) {
+  const ids = new Set()
+  const byRun = activeByParent.get(parentId)
+  if (byRun !== undefined) {
+    for (const childId of byRun.values()) ids.add(childId)
+  }
+  const session = sessions?.get?.(parentId)
+  if (session !== undefined) {
+    for (const childId of activeChildIds(sessionEvents(session))) ids.add(childId)
+  }
+  if (ids.size === 0 && sessions?.list) {
+    for (const s of sessions.list()) {
+      if (s && s.header?.origin === 'subagent'
+        && s.header.parentSession === parentId
+        && agents?.get?.(s.id)?.status === 'running') {
+        ids.add(s.id)
+      }
+    }
+  }
+  return [...ids].map((childId) => ({
+    childId,
+    ...(childLabelBy?.get?.(childId) !== undefined
+      ? { label: childLabelBy.get(childId) }
+      : {}),
+  }))
+}
+
 // Fold the child's task label out of its own `subagent/descriptor` event (the
 // durable, model-hidden composition record). The first descriptor is
 // authoritative; `label` is optional by contract.
@@ -161,19 +249,18 @@ function foldChildLabel(events) {
 
 // Derive the four-state session summary the extension renders
 // (docs/design.md §8.10): waiting > working > completed > idle.
-function summarizeSession(session, agents, childLabelBy) {
+// `childRuns` is computed by the caller via activeChildRuns() (M13.1: the
+// event-bus index is the authoritative source; see note above).
+function summarizeSession(session, agents, childRuns) {
   const events = sessionEvents(session)
   const running = agents?.get?.(session.id)?.status === 'running'
   let state = 'idle'
   if (hasPendingInteraction(events)) state = 'waiting'
   else if (running) state = 'working'
   else if (events.some((event) => event.type === 'turn/end')) state = 'completed'
-  const childRuns = activeChildIds(events).map((childId) => ({
-    childId,
-    ...(childLabelBy?.get?.(childId) !== undefined
-      ? { label: childLabelBy.get(childId) }
-      : {}),
-  }))
+  // M13.1：无 turn/end 但仍有活跃子代理（如冷恢复的父会话）→ 归入「进行中」，
+  // 与「有子代理运行归入进行中」定稿一致（否则 popup 按 idle 隐藏整行）。
+  else if (childRuns.length > 0) state = 'working'
   let updatedAt
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const time = events[i]?.time
@@ -213,19 +300,17 @@ function buildChildLabelMap(live) {
 // snapshot — one derivation, two views, so the poll and push surfaces can
 // never drift (subagent sessions never row; archived sessions without
 // running children are omitted, archive masters WITH running children stay).
-function buildItems(ctx, sessions, agents) {
+function buildItems(ctx, sessions, agents, activeByParent) {
   const live = sessions.list()
   const childLabelBy = buildChildLabelMap(live)
-  const workspaceRegistry = ctx.get('workspaceRegistry')
-  const archivedIds = (workspaceRegistry && Array.isArray(workspaceRegistry.archivedSessionIds))
-    ? new Set(workspaceRegistry.archivedSessionIds)
-    : null
+  const archivedIds = archivedSessionIds(ctx)
   const items = []
   for (const session of live) {
     if (!session || typeof session !== 'object') continue
     if (session.header?.origin === 'subagent') continue
     try {
-      const summary = summarizeSession(session, agents, childLabelBy)
+      const childRuns = activeChildRuns(session.id, sessions, agents, childLabelBy, activeByParent)
+      const summary = summarizeSession(session, agents, childRuns)
       if (archivedIds !== null && archivedIds.has(session.id) && summary.childRuns.length === 0) continue
       items.push(summary)
     } catch {
@@ -271,6 +356,13 @@ export function apply(ctx) {
   const pending = new Map()
   let frameId = 0
 
+  // M13.1 子代理活跃索引（权威源 = 事件总线；见 activeChildRuns 注记）：
+  //   childParentBy  childId → parentId（session/created 的 header.parentSession）
+  //   activeByParent parentId → Map<runId, childId>（subagent/start|end 总线事件）
+  // 无条件维护（不 gate 在 connections.size 上——索引是状态，不是推送）。
+  const childParentBy = new Map()
+  const activeByParent = new Map()
+
   const sseFrame = (event, data) => {
     frameId += 1
     return `id: ${frameId}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`
@@ -297,14 +389,12 @@ export function apply(ctx) {
     const agents = ctx.get('agents')
     let summary
     try {
-      summary = summarizeSession(session, agents, buildChildLabelMap(sessions.list()))
+      const childRuns = activeChildRuns(sessionId, sessions, agents, buildChildLabelMap(sessions.list()), activeByParent)
+      summary = summarizeSession(session, agents, childRuns)
     } catch {
       return
     }
-    const workspaceRegistry = ctx.get('workspaceRegistry')
-    const archivedIds = (workspaceRegistry && Array.isArray(workspaceRegistry.archivedSessionIds))
-      ? new Set(workspaceRegistry.archivedSessionIds)
-      : null
+    const archivedIds = archivedSessionIds(ctx)
     if (archivedIds !== null && archivedIds.has(sessionId) && summary.childRuns.length === 0) {
       if (summaryBy.has(sessionId)) {
         summaryBy.delete(sessionId)
@@ -341,16 +431,7 @@ export function apply(ctx) {
       kind: 'exact',
       path: '/_lifecycle/health',
       handler: async (req, res) => {
-        if (!allow(req)) {
-          res.writeHead(403)
-          res.end()
-          return
-        }
-        if (req.method !== 'GET') {
-          res.writeHead(405, { allow: 'GET' })
-          res.end()
-          return
-        }
+        if (!routeGuard(req, res, 'GET')) return
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({
           ok: true,
@@ -365,16 +446,7 @@ export function apply(ctx) {
       kind: 'exact',
       path: '/_lifecycle/shutdown',
       handler: async (req, res) => {
-        if (!allow(req)) {
-          res.writeHead(403)
-          res.end()
-          return
-        }
-        if (req.method !== 'POST') {
-          res.writeHead(405, { allow: 'POST' })
-          res.end()
-          return
-        }
+        if (!routeGuard(req, res, 'POST')) return
         if (exiting) {
           res.writeHead(409, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ ok: false, error: 'shutdown already in progress' }))
@@ -393,16 +465,7 @@ export function apply(ctx) {
       kind: 'exact',
       path: '/_manager/sessions',
       handler: async (req, res) => {
-        if (!allow(req)) {
-          res.writeHead(403)
-          res.end()
-          return
-        }
-        if (req.method !== 'GET') {
-          res.writeHead(405, { allow: 'GET' })
-          res.end()
-          return
-        }
+        if (!routeGuard(req, res, 'GET')) return
         const sessions = ctx.get('sessions')
         if (sessions === undefined) {
           res.writeHead(500, { 'content-type': 'application/json' })
@@ -410,7 +473,7 @@ export function apply(ctx) {
           return
         }
         const agents = ctx.get('agents')
-        const items = buildItems(ctx, sessions, agents)
+        const items = buildItems(ctx, sessions, agents, activeByParent)
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true, items }))
       },
@@ -419,16 +482,7 @@ export function apply(ctx) {
       kind: 'exact',
       path: '/_manager/events',
       handler: (req, res) => {
-        if (!allow(req)) {
-          res.writeHead(403)
-          res.end()
-          return
-        }
-        if (req.method !== 'GET') {
-          res.writeHead(405, { allow: 'GET' })
-          res.end()
-          return
-        }
+        if (!routeGuard(req, res, 'GET')) return
         const sessions = ctx.get('sessions')
         if (sessions === undefined) {
           res.writeHead(500, { 'content-type': 'application/json' })
@@ -446,7 +500,7 @@ export function apply(ctx) {
         res.write('retry: 3000\n\n')
         let items = []
         try {
-          items = buildItems(ctx, sessions, ctx.get('agents'))
+          items = buildItems(ctx, sessions, ctx.get('agents'), activeByParent)
         } catch {
           items = []
         }
@@ -498,6 +552,54 @@ export function apply(ctx) {
       const id = payload?.agent?.id
       if (typeof id !== 'string') return
       recompute(id)
+    }),
+    // M13.1 子代理活跃索引（无条件维护——索引是状态，不是推送，不 gate 在
+    // connections.size 上）：session/created 登记 childId → parentId；
+    // subagent/start|end 按 runId 配对维护 activeByParent；dispose 清理。
+    // parentId 缺失时经 liveParentOf 反查（插件热重载后 session/created
+    // 可能已错过；子会话 header.parentSession 是权威关联）。
+    ctx.on('session/created', (session) => {
+      if (session?.header?.origin !== 'subagent') return
+      const parentId = session.header.parentSession
+      if (typeof parentId === 'string' && typeof session.id === 'string') {
+        childParentBy.set(session.id, parentId)
+      }
+    }),
+    ctx.on('session/disposed', (session) => {
+      if (session?.header?.origin !== 'subagent') return
+      const parentId = childParentBy.get(session.id)
+      childParentBy.delete(session.id)
+      if (parentId !== undefined) removeChildFromActive(activeByParent, parentId, session.id)
+    }),
+    ctx.on('subagent/start', (info) => {
+      const childId = info?.id
+      if (typeof childId !== 'string') return
+      const parentId = childParentBy.get(childId) ?? liveParentOf(ctx.get('sessions'), childId)
+      if (parentId === undefined) return
+      childParentBy.set(childId, parentId) // 供 end/dispose 清理复用
+      if (typeof info?.runId === 'string') {
+        let byRun = activeByParent.get(parentId)
+        if (byRun === undefined) {
+          byRun = new Map()
+          activeByParent.set(parentId, byRun)
+        }
+        byRun.set(info.runId, childId)
+      }
+      if (connections.size > 0) recompute(parentId)
+    }),
+    ctx.on('subagent/end', (info) => {
+      const childId = info?.id
+      if (typeof childId !== 'string') return
+      const parentId = childParentBy.get(childId) ?? liveParentOf(ctx.get('sessions'), childId)
+      if (parentId === undefined) return
+      if (typeof info?.runId === 'string') {
+        const byRun = activeByParent.get(parentId)
+        if (byRun !== undefined) {
+          byRun.delete(info.runId)
+          if (byRun.size === 0) activeByParent.delete(parentId)
+        }
+      }
+      if (connections.size > 0) recompute(parentId)
     }),
     () => {
       clearInterval(heartbeat)

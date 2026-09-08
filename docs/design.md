@@ -1033,12 +1033,26 @@ GET /_manager/sessions          （dsh 配套插件，lifecycle 同款 allow() �
 403 → 围栏拒绝；404 → 端点未注册（= 插件未装/版本过旧）；405 → 非 GET
 ```
 
-- **契约演进（M11，2026-xx-xx 定稿）**：items 新增 `hasActiveChildren`/`childRuns`（子代理感知）——父会话事件流中 `subagent/start`（runId）无配对 `subagent/end` 即视为活动子代理（官方 dsh-subagent lifecycle 边缘写入父会话日志；配对判据权威：覆盖 cold-resume 新 epoch、孙子代链 end 延迟、中断/取消 end 照发）。`label` 折叠自子代理会话自身 `subagent/descriptor` 事件的 label 字段（无则不返回，客户端降级显示「子代理」）。**origin='subagent' 会话不单独出列**（官方 Web UI 亦隐藏；运行状态归并进父行）。**官方归档对齐**：`ctx.get('workspaceRegistry')?.archivedSessionIds` 命中即过滤；**但已归档且仍有活动子代理的会话保留**（感知优先：工作未真正结束）。workspaceRegistry 缺失部署自然降级为不过滤。
+- **契约演进（M11 定稿，子代理感知；M13.1 修正数据源）**：items 新增
+  `hasActiveChildren`/`childRuns`（子代理感知）——活动子代理判定 = `subagent/start`（runId）
+  无配对 `subagent/end`（配对判据权威：覆盖 cold-resume 新 epoch、孙子代链 end 延迟、
+  中断/取消 end 照发）。**M13.1 数据源修正（2026-09-04，dsh 0.1.1-rc.2/0.1.2-rc.1 源码
+  核验）**：`subagent/start|end` 只经事件总线（scoped dispatch，
+  `packages/subagent/subagent/src/lifecycle.ts` observeRun）发布，**不写入父会话
+  session log**——旧实现从 `sessionEvents()` 配对在真实环境恒空、popup 不显示子代理行。
+  修复后插件以事件总线为权威源维护活跃子代理索引（父子关系经 `session/created` 的
+  `header.parentSession` 反查，sdk/server.ts 同款），并保留会话日志配对（旧版 dsh/测试桩
+  兼容）与 live 扫描兜底（插件热重载后：`origin='subagent'` + `parentSession` 匹配 + 子
+  agent `status==='running'`，对齐 dsh list-children 的 activity 判定）。`label` 折叠自
+  子代理会话自身 `subagent/descriptor` 事件的 label 字段（无则不返回，客户端降级显示
+  「子代理」）。**origin='subagent' 会话不单独出列**（官方 Web UI 亦隐藏；运行状态归并进
+  父行）。**官方归档对齐**：`archivedSessionIds` 命中即过滤；**但已归档且仍有活动子代理的
+  会话保留**（感知优先：工作未真正结束）。workspaceRegistry 缺失部署自然降级为不过滤。
 
 - `state` 映射：`running && pendingInteraction` → `waiting`（等待：批准/问答/计划审查）；`running` → `working`；`completed` → `completed`；其余 → `idle`。**契约仍为 4 态（后端完整语义）；M10.1（2026-08-24 用户定稿）扩展展示层只呈现 3 态**（遵循 Web UI 的区分：进行中/等待/完成——`idle` 不渲染：用户实机观察新会话默认不在列表、未发内容即离开则会话不存在，idle 在 live 集合近零出现，且 Web UI 本体也不区分 idle/completed（统一 data-state=done）；见上「idle 实际存在性注记」）。**字段缺失时降级**：title 不可得 → 会话行显示「会话 #<id 前 8>」；pendingInteraction 不可得 → `waiting` 不可判（仅 working/idle，如实标注）。**内容零读取**：端点只出摘要元数据，不读消息/事件体。
 - 插件包形态：**D1 决策点**——扩展现有 `dsh-lifecycle` 包（同一安装/升级面，推荐）或新包 `dsh-manager-sessions`（语义命名更清晰，但多一个挂载/升级面）。
 
-- **演示层（M11 定稿，UI 走查 V1 落地）**：`state` 契约仍 4 态；展示演进为 **四态感知**——`waiting`(待确认,琥珀黄) > `working`(进行中,蓝) / `completed+hasActiveChildren`(**已停止**,绿,主会话已停但子代理在跑,恒显不受时长/已读约束) > `completed` 无子代理(**已完成**,绿,仅"新鲜"显示);`idle` 不渲染。**新鲜 = 完成时刻距今 ≤ `settings.retentionMins`（默认 30，合法 5~1440，0 = 从不显示已完成）**。**已读机制（本地展示层，不触碰 dsh 数据）**：已完成行 hover 出现「已读」（原地微药丸「已读 · 撤销 3s」，倒计时结束落库 `readSessions`{sessionId:readAt} 并移除行；期内可撤销）；显示判定 `updatedAt > readAt`；会话重新活跃自动重现；再次完成后需再次已读。**子代理行**：父行下方缩进连接线 + 标签(label||「子代理」) + 「进行中」(蓝,shimmer)。排序：待确认 > 进行中/已停止 > 已完成；同组 updatedAt 降序。计数「N 活跃」= 主会话行数（子代理行不单独计数）。徽标口径：有子代理运行归入进行中（蓝 n 优先于完成提醒）。
+- **演示层（M11 定稿，UI 走查 V1 落地）**：`state` 契约仍 4 态；展示演进为 **四态感知**——`waiting`(待确认,琥珀黄) > `working`(进行中,蓝) / `completed+hasActiveChildren`(**已停止**,绿,主会话已停但子代理在跑,恒显不受时长/已读约束) > `completed` 无子代理(**已完成**,绿,仅"新鲜"显示);`idle` 不渲染。**新鲜 = 完成时刻距今 ≤ `settings.retentionMins`（默认 30，合法 5~1440，0 = 从不显示已完成）**。**已读机制（本地展示层，不触碰 dsh 数据）**：已完成行 hover 出现「已读」（原地微药丸「已读 · 撤销 3s」，倒计时结束落库 `readSessions`{sessionId:readAt} 并移除行；期内可撤销）；显示判定 `updatedAt > readAt`；会话重新活跃自动重现；再次完成后需再次已读。**子代理行**：父行下方缩进连接线 + 标签(label||「子代理」) + 「进行中」(蓝,shimmer)。排序：待确认 > 进行中/已停止 > 已完成；同组 updatedAt 降序。计数「N 活跃」= 主会话行数（子代理行不单独计数）。徽标口径：有子代理运行归入进行中（蓝 n 优先于完成提醒；**M13.1 落实：面板端点/SSE 两路计数均含 `completed+hasActiveChildren`**）。
 
 **扩展侧**：
 - host 新增只读 action `sessions`（§6.3 白名单 + SW `{type:'native'}` 通道复用，无新权限）；经宿主 fetch `http://127.0.0.1:<port>/_manager/sessions`（1.5s 超时，失败静默→会话区显示降级提示）。
