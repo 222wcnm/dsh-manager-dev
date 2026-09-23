@@ -33,6 +33,8 @@ const ERROR_TEXTS = {
 
 const DEFAULT_SETTINGS = {
   port: 3080, profile: 'web', autoOpen: true, badgeInterval: 30, theme: 'follow-webui',
+  launchMode: 'global', // 'global' | 'npx' | 'source'
+  customPath: '',       // 本地源码目录或 bin.js 路径
   attention: true, attentionDone: true,
   // M11 会话感知(design §8.10 演进):完成会话保留时长(分钟)——刚完成的会话在此
   // 时间窗内显示,过期/已读后从列表消失;5~1440,0 = 从不显示已完成。
@@ -41,6 +43,18 @@ const DEFAULT_SETTINGS = {
   // 字符语义锁定；与 background.js DEFAULT_SETTINGS 保持一致（防 onInstalled 合并丢弃）
   colorMap: DSHColors.DEFAULT_COLOR_MAP,
 };
+
+// 清洗本地路径输入：剥除首尾双引号/单引号/空格，去除尾部反斜杠（防 Windows 命令行转义问题）
+function sanitizePathInput(val) {
+  let s = (val || '').trim();
+  while ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1).trim();
+  }
+  if (!/^[A-Za-z]:[\\/]$/.test(s) && s.length > 1) {
+    s = s.replace(/[\\/]+$/, '');
+  }
+  return s;
+}
 
 // 操作进行中的按钮文案与阶段说明（点击反馈）
 const ACTION_LABELS = {
@@ -212,6 +226,10 @@ function bindEvents() {
   $('btn-open').addEventListener('click', () => openWebUI());
   $('btn-copy-log').addEventListener('click', copyLog);
   $('btn-logs').addEventListener('click', openLogs);
+  const btnBannerRestart = $('btn-banner-restart');
+  if (btnBannerRestart) {
+    btnBannerRestart.addEventListener('click', () => doAction('restart'));
+  }
 
   const portText = $('port-text');
   if (portText) {
@@ -232,6 +250,20 @@ function bindEvents() {
   $('set-port').addEventListener('input', () => clearFieldInvalid('set-port'));
   $('set-badge').addEventListener('input', () => clearFieldInvalid('set-badge'));
   $('set-retention').addEventListener('input', () => clearFieldInvalid('set-retention')); // M11
+  const launchModeEl = $('set-launch-mode');
+  if (launchModeEl) {
+    launchModeEl.addEventListener('change', () => {
+      clearFieldInvalid('set-custom-path');
+      updateLaunchModeUI();
+    });
+  }
+  const customPathEl = $('set-custom-path');
+  if (customPathEl) {
+    customPathEl.addEventListener('input', () => clearFieldInvalid('set-custom-path'));
+    customPathEl.addEventListener('blur', () => {
+      customPathEl.value = sanitizePathInput(customPathEl.value);
+    });
+  }
 
   // 外观行（M6）：点选即生效（写入 settings.theme + 即时应用，不弹 toast、不触发 saveSettings）
   document.querySelectorAll('.theme-cube').forEach((btn) => {
@@ -793,6 +825,8 @@ async function doAction(action) {
     : {
         profile: settings ? settings.profile : DEFAULT_SETTINGS.profile,
         port: settings ? settings.port : DEFAULT_SETTINGS.port,
+        launchMode: settings ? (settings.launchMode || DEFAULT_SETTINGS.launchMode) : DEFAULT_SETTINGS.launchMode,
+        customPath: settings ? (settings.customPath || '') : '',
       };
 
   let resp;
@@ -1009,8 +1043,48 @@ function render() {
   // M9 会话区：状态变化时按现有 sessionsData 收敛显示（隐藏/提示切换）
   applySessions();
 
+  // 待重启提示微横幅（配置变更对比）
+  renderRestartBanner();
+
   // 底部提示：M2 契约 —— lifecycle:true 显示优雅停机已启用
   renderHint();
+}
+
+// 待重启提示微横幅：对比当前运行中的 detail 与 settings，检测是否需要重启生效
+function renderRestartBanner() {
+  const banner = $('restart-pending-banner');
+  if (!banner) return;
+  if (state !== 'running' || !detail || pending) {
+    banner.classList.add('hidden');
+    return;
+  }
+  const curMode = detail.launchMode || 'global';
+  const cfgMode = (settings && settings.launchMode) || DEFAULT_SETTINGS.launchMode;
+  const curPath = detail.customPath || '';
+  const cfgPath = (settings && settings.customPath) || '';
+  const curPort = detail.port;
+  const cfgPort = settings && settings.port;
+
+  const modeDiff = curMode !== cfgMode;
+  const pathDiff = cfgMode === 'source' && curPath !== cfgPath;
+  const portDiff = Number.isInteger(cfgPort) && cfgPort > 0 && curPort !== cfgPort;
+
+  if (modeDiff || pathDiff || portDiff) {
+    const modeNames = { global: '全局', npx: 'NPX', source: '本地源码' };
+    const rpbText = $('rpb-text');
+    if (rpbText) {
+      if (modeDiff) {
+        rpbText.textContent = `启动方式已修改（当前:${modeNames[curMode] || curMode} → 新选:${modeNames[cfgMode] || cfgMode}），重启生效`;
+      } else if (pathDiff) {
+        rpbText.textContent = '源码路径已修改，需重启生效';
+      } else if (portDiff) {
+        rpbText.textContent = `端口已修改（当前:${curPort} → 新选:${cfgPort}），需重启生效`;
+      }
+    }
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
 }
 
 // 状态词（#state-word）文本映射（M7 状态卡）
@@ -1070,6 +1144,10 @@ function row2Text() {
   if (state === 'running') {
     const health = detail && detail.health;
     const parts = [];
+    if (detail && detail.launchMode) {
+      const modeNames = { global: '全局', npx: 'NPX', source: '本地源码' };
+      parts.push(modeNames[detail.launchMode] || detail.launchMode);
+    }
     if (health) {
       if (health.uptimeMs) parts.push('已运行 ' + formatCompactUptime(health.uptimeMs));
     }
@@ -1306,9 +1384,30 @@ function loadReadSessions() {
   });
 }
 
+const LAUNCH_MODE_DESCS = {
+  global: '使用本地全局安装的 dsh 命令行启动',
+  npx: '使用 npx @deepseek-ai/dsh 启动（免全局安装）',
+  source: '使用本地源码仓库（如 git clone）或指定 bin.js 启动',
+};
+
+function updateLaunchModeUI() {
+  const modeEl = $('set-launch-mode');
+  if (!modeEl) return;
+  const mode = modeEl.value;
+  const descEl = $('set-launch-desc');
+  if (descEl) descEl.textContent = LAUNCH_MODE_DESCS[mode] || LAUNCH_MODE_DESCS.global;
+  const wrap = $('set-source-wrap');
+  if (wrap) wrap.classList.toggle('hidden', mode !== 'source');
+}
+
 function renderSettingsForm() {
   $('set-port').value = settings.port;
   $('set-profile').value = settings.profile;
+  const mode = (settings.launchMode && ['global', 'npx', 'source'].includes(settings.launchMode))
+    ? settings.launchMode : 'global';
+  if ($('set-launch-mode')) $('set-launch-mode').value = mode;
+  if ($('set-custom-path')) $('set-custom-path').value = settings.customPath || '';
+  updateLaunchModeUI();
   $('set-autoopen').checked = !!settings.autoOpen;
   $('set-badge').value = settings.badgeInterval;
   $('set-attention').checked = settings.attention !== false; // 缺省视为开（向后兼容）
@@ -1465,6 +1564,13 @@ function saveSettings() {
   const badge = parseInt($('set-badge').value, 10);
   const retention = parseInt($('set-retention').value, 10);
   const profile = $('set-profile').value.trim();
+  const launchModeEl = $('set-launch-mode');
+  const launchMode = launchModeEl ? launchModeEl.value : 'global';
+  const customPathEl = $('set-custom-path');
+  const customPath = customPathEl ? sanitizePathInput(customPathEl.value) : '';
+  if (customPathEl && customPathEl.value !== customPath) {
+    customPathEl.value = customPath;
+  }
   const errEl = $('settings-error');
 
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -1485,10 +1591,18 @@ function saveSettings() {
     markFieldInvalid('set-retention');
     return;
   }
+  if (launchMode === 'source' && !customPath) {
+    errEl.textContent = '本地源码模式下，必须填写源码根目录或 bin.js 路径';
+    errEl.classList.remove('hidden');
+    markFieldInvalid('set-custom-path');
+    return;
+  }
 
   const next = {
     port,
     profile: profile || 'web',
+    launchMode: ['global', 'npx', 'source'].includes(launchMode) ? launchMode : 'global',
+    customPath,
     autoOpen: $('set-autoopen').checked,
     badgeInterval: badge,
     theme: settings ? settings.theme : DEFAULT_SETTINGS.theme, // 保留主题选择（M6）

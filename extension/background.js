@@ -21,6 +21,8 @@ const NATIVE_HOST = 'com.dsh.manager';
 const DEFAULT_SETTINGS = {
   port: 3080,
   profile: 'web',
+  launchMode: 'global', // 'global' | 'npx' | 'source'
+  customPath: '',       // 本地源码根目录或 bin.js 路径（launchMode === 'source' 时有效）
   autoOpen: true,
   badgeInterval: 30, // 秒；chrome.alarms 最小周期 0.5 分钟（30s）
   attention: true,   // M8：徽标提醒「该点回来看看了」（design §8.9）

@@ -119,14 +119,14 @@ async function main() {
   fs.mkdirSync(patchDir, { recursive: true });
   const pluginRef = pathToFileURL(path.join(PLUGIN_DIR, 'index.js')).href;
   fs.writeFileSync(path.join(patchDir, 'cordis.patch.yml'),
-    `- insert:\n    - id: dsh-lifecycle\n      name: '${pluginRef}'\n`, 'utf8');
+    `- id: web-runtime\n  config:\n    openBrowser: false\n    printUrl: true\n- insert:\n    - id: dsh-lifecycle\n      name: '${pluginRef}'\n`, 'utf8');
   record('前置：插件 cordis.patch.yml 已写入隔离 profile', fs.existsSync(path.join(patchDir, 'cordis.patch.yml')),
     path.join(patchDir, 'cordis.patch.yml'));
 
   // 1) start → running（真实 rc.1 GET / 401，httpProbe 401 视为就绪）
   const s1 = runHost({ id: 'r1', action: 'start', payload: { port: PORT } }, 'r1');
   record('start（真实 rc.1）→ running', !!(s1 && s1.ok === true && s1.result && s1.result.state === 'running'),
-    JSON.stringify(s1 && s1.result));
+    JSON.stringify(s1 && s1.result && { state: s1.result.state, pid: s1.result.pid, port: s1.result.port }));
   if (!(s1 && s1.ok === true && s1.result && s1.result.state === 'running')) {
     // 失败时保留现场：打印 dsh 日志尾部，跳过 cleanup 供人工排查
     const logPath = path.join(BASE, 'logs', 'dsh-web.log');
@@ -138,6 +138,15 @@ async function main() {
     console.log('FAIL | rc1-e2e | 现场保留于 ' + BASE);
     process.exit(1);
   }
+
+  const readyFile = path.join(BASE, 'ready', 'dsh-web.json');
+  let ready;
+  try { ready = JSON.parse(fs.readFileSync(readyFile, 'utf8')); } catch (_) {}
+  const run = readRunFile();
+  record('M13 二期：真实插件已发布匹配本次启动的 ready 文件',
+    !!(ready && ready.state === 'ready' && ready.launchId === run.launchId
+      && ready.pid === run.pid && ready.port === PORT),
+    ready && JSON.stringify({ state: ready.state, pid: ready.pid, port: ready.port }));
 
   // 2) 直接探测：GET / 应 401（认证闸门）、/manifest.webmanifest 应 200 含指纹
   const root = await httpGet(PORT, '/');
@@ -155,7 +164,7 @@ async function main() {
     JSON.stringify(res2 && { state: res2.state, version: res2.version }));
   record('status.launchUrl 捕获（含 ?token=）',
     !!(res2 && typeof res2.launchUrl === 'string' && res2.launchUrl.startsWith('http://127.0.0.1:' + PORT + '/?token=')),
-    res2 && String(res2.launchUrl));
+    res2 && (res2.launchUrl ? '[captured, redacted]' : '[missing]'));
   record('status.url 仍为裸 URL（不含 token）',
     !!(res2 && res2.url === 'http://127.0.0.1:' + PORT && res2.url.indexOf('token') === -1),
     res2 && String(res2.url));
@@ -171,8 +180,21 @@ async function main() {
   const s3 = runHost({ id: 'r3', action: 'stop', payload: {} }, 'r3');
   record('stop → stopped', !!(s3 && s3.ok === true && s3.result && s3.result.state === 'stopped'),
     JSON.stringify(s3 && s3.result));
+  record('M13 二期：dispose 删除真实插件就绪文件', !fs.existsSync(readyFile));
 
-  cleanup();
+  const dynamic = runHost({ id: 'r4', action: 'start', payload: { port: 0 } }, 'r4');
+  let dynamicReady;
+  try { dynamicReady = JSON.parse(fs.readFileSync(readyFile, 'utf8')); } catch (_) {}
+  record('M13 二期：真实动态端口启动及新 launchId',
+    !!(dynamic?.ok && dynamic.result.state === 'running' && dynamicReady?.state === 'ready'
+      && dynamicReady.port === dynamic.result.port && dynamicReady.pid === dynamic.result.pid
+      && dynamicReady.launchId !== ready?.launchId));
+  const dynamicStop = runHost({ id: 'r5', action: 'stop' }, 'r5');
+  record('M13 二期：动态端口实例停止并清理文件',
+    !!(dynamicStop?.ok && dynamicStop.result.state === 'stopped' && !fs.existsSync(readyFile)));
+
+  if (!failures) cleanup();
+  else console.log('失败现场保留于 ' + BASE);
   console.log('=== 汇总：FAIL ' + failures + ' ===');
   process.exit(failures ? 1 : 0);
 }

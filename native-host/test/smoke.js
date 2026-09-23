@@ -428,6 +428,46 @@ function scenarioBadRequest() {
   const c = runHost({ id: 's10c', action: 'start', payload: { port: 31910, host: '0.0.0.0' } }, 's10c');
   expect(c && c.ok === false && c.error && c.error.code === 'BAD_REQUEST',
     '10 payload.host=0.0.0.0 -> BAD_REQUEST', JSON.stringify(c));
+  const d = runHost({ id: 's10d', action: 'start', payload: { port: 31910, launchMode: 'unknown-mode' } }, 's10d');
+  expect(d && d.ok === false && d.error && d.error.code === 'BAD_REQUEST',
+    '10 非法 launchMode -> BAD_REQUEST', JSON.stringify(d));
+  const e = runHost({ id: 's10e', action: 'start', payload: { port: 31910, launchMode: 'source', customPath: '' } }, 's10e');
+  expect(e && e.ok === false && e.error && e.error.code === 'BAD_REQUEST',
+    '10 source 模式空 customPath -> BAD_REQUEST', JSON.stringify(e));
+  const f = runHost({ id: 's10f', action: 'start', payload: { port: 31910, launchMode: 'source', customPath: 'D:\\non_existent_dir_123456' } }, 's10f');
+  expect(f && f.ok === false && f.error && f.error.code === 'BAD_REQUEST',
+    '10 source 模式不存在 customPath -> BAD_REQUEST', JSON.stringify(f));
+
+  // 重启预检事务化（先检后杀）：启动后发起携带非法 customPath 的 restart
+  // 必须返回 BAD_REQUEST，且原运行中的旧服务绝不被停机（PID 依然存活，status 依然 running）
+  const sStart = runHost({ id: 's10g', action: 'start', payload: { port: 31910 } }, 's10g');
+  expect(sStart && sStart.ok === true && sStart.result.state === 'running',
+    '10 重启预检基准：start -> running', JSON.stringify(sStart && sStart.result));
+  const oldPid = sStart.result.pid;
+
+  const rFail = runHost({ id: 's10h', action: 'restart', payload: { port: 31910, launchMode: 'source', customPath: 'D:\\non_existent_path_preflight' } }, 's10h');
+  expect(rFail && rFail.ok === false && rFail.error && rFail.error.code === 'BAD_REQUEST',
+    '10 restart 携带非法 customPath -> BAD_REQUEST', JSON.stringify(rFail && rFail.error));
+
+  // 关键断言：预检失败后旧进程依然存活！
+  expect(pidAlive(oldPid), '10 restart 预检失败后旧进程依然存活（未被杀死）', 'oldPid=' + oldPid);
+  const sCheck = runHost({ id: 's10i', action: 'status', payload: {} }, 's10i');
+  expect(sCheck && sCheck.ok === true && sCheck.result.state === 'running' && sCheck.result.pid === oldPid,
+    '10 restart 预检失败后 status 依然为 running 且 pid 未变', JSON.stringify(sCheck && sCheck.result));
+
+  // status 观测性字段断言：包含了 launchMode 与 customPath
+  expect(sCheck.result.launchMode === 'global' && typeof sCheck.result.customPath === 'string',
+    '10 status.result 包含 launchMode 与 customPath 字段', JSON.stringify({ mode: sCheck.result.launchMode, path: sCheck.result.customPath }));
+
+  // 路径清洗验证：带双引号的合法文件路径
+  const cleanPath = runHost({ id: 's10j', action: 'start', payload: { port: 31910, launchMode: 'source', customPath: '"' + FAKE_DSH + '"' } }, 's10j');
+  // 已有实例运行中会报 ALREADY_RUNNING，证明成功通过了路径存在性校验与清洗（否则会抛 BAD_REQUEST 路径不存在）
+  expect(cleanPath && cleanPath.ok === false && cleanPath.error && cleanPath.error.code === 'ALREADY_RUNNING',
+    '10 带双引号的 customPath 成功清洗并通过路径校验', JSON.stringify(cleanPath && cleanPath.error));
+
+  // 清理
+  const sStop = runHost({ id: 's10k', action: 'stop', payload: {} }, 's10k');
+  expect(sStop && sStop.ok === true && sStop.result.state === 'stopped', '10 清理：stop', JSON.stringify(sStop && sStop.result));
   cleanup();
 }
 
@@ -1280,6 +1320,37 @@ async function scenarioAuthCompat() {
 }
 
 // ---------------------------------------------------------------------------
+// M13 phase 2: ready file provides PID/port even without a URL line or HTTP readiness.
+async function scenarioReadiness() {
+  const env = { DSH_FAKE_READY: '1', DSH_FAKE_NO_URL: '1', DSH_FAKE_LOG_HEADERS: '1' };
+  let previousId;
+  for (const port of [31930, 0]) {
+    const s = runHost({ id: 'ready-start', action: 'start', payload: { port } }, 'ready-start', env);
+    expect(s?.ok && s.result.state === 'running', '30 ready file starts with HTTP 503, port=' + port);
+    if (!s?.ok) throw new Error('readiness start failed: ' + JSON.stringify(s));
+    const rec = readRunFile();
+    const file = path.join(BASE, 'ready', 'dsh-web.json');
+    const signal = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(rec.launchId === signal.launchId && rec.launchId !== previousId,
+      '30 launch identity is unique and persisted');
+    previousId = rec.launchId;
+    expect(signal.pid === rec.pid && signal.port === rec.port && rec.port > 0,
+      '30 plugin PID and actual port match run record');
+    const logFile = path.join(BASE, 'logs', 'dsh-web.log');
+    const before = fs.readFileSync(logFile, 'utf8').length;
+    const status = runHost({ id: 'ready-status', action: 'status' }, 'ready-status', env);
+    expect(status?.result?.state === 'running' && status.result.lifecycle === true
+      && status.result.health.pid === rec.pid, '30 status uses plugin health');
+    expect(!fs.readFileSync(logFile, 'utf8').slice(before).includes('FAKE-REQ'),
+      '30 fresh readiness status sends zero HTTP requests');
+    const stop = runHost({ id: 'ready-stop', action: 'stop' }, 'ready-stop', env);
+    expect(stop?.ok && stop.result.state === 'stopped', '30 readiness instance stops');
+    await waitPidGone(rec.pid, 5000);
+    expect(!fs.existsSync(file), '30 normal exit removes readiness file');
+    cleanup();
+  }
+}
+
 // 主流程
 // ---------------------------------------------------------------------------
 async function main() {
@@ -1338,6 +1409,8 @@ async function main() {
   try { await scenarioSessions(); } catch (e) { console.log('  场景 28 异常:', e.message); }
   cleanup();
   try { await scenarioAuthCompat(); } catch (e) { console.log('  场景 29 异常:', e.message); }
+  cleanup();
+  try { await scenarioReadiness(); } catch (e) { record('readiness', '场景 30 异常', false, e.message); }
   cleanup();
 
   const failed = results.filter((r) => !r.ok);

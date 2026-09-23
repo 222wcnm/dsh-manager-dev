@@ -44,6 +44,7 @@
 
 - **一键启动 / 停止 / 重启**：停止自动走 dsh-lifecycle 优雅停机，插件不在才强制降级
 - **端口自由**：设置 `0` = 自动分配动态端口（启动后自动回填实际端口）；端口被占用时可直接换端口
+- **主动报告就绪**：搭配 dsh-lifecycle 0.4.0，服务主动报告运行状态和实际端口；未升级插件时仍按原方式探测。升级需复制完整插件目录并重启 dsh。
 - **识别外部 dsh**：终端里手工起过的 `dsh web`（任意端口）也会被自动认出，点「接管」后即可停止 / 重启
 
 ### 在用的时候，人不必停在 dsh 页面
@@ -102,6 +103,8 @@ popup 设置面板（保存在 `chrome.storage.local`）：
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
+| 启动方式 (launchMode) | `全局安装 (global)` | 可选 `全局安装 (global)` / `NPX 免安装 (npx)` / `本地源码路径 (source)` |
+| 源码路径 (customPath) | 空 | 仅 `source` 模式必填：指向本地 clone 仓库根目录或 bin.js 路径 |
 | port | `3080` | `0` = 自动分配，启动后从日志回填实际端口 |
 | profile | `web` | 透传给 `dsh --profile` |
 | host | `127.0.0.1` | 固定回环 |
@@ -128,7 +131,7 @@ popup 设置面板（保存在 `chrome.storage.local`）：
 
 ## 更多
 
-- 详细设计（架构 / 协议 / 安全 / 路线图）：[docs/design.md](docs/design.md)
+- 设计规格索引（架构 / 协议 / 扩展 / 安全 / 路线图）：[docs/design.md](docs/design.md)
 - 开发、测试命令与提交规范：[CONTRIBUTING.md](CONTRIBUTING.md)
 - UI 截图脚本（可复现静态预览图）：`tools/ui-theme/capture-readme-shots.js`
 - dsh 本体：[github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)

@@ -5,14 +5,14 @@
 
 ## 权威文档（改动前必读）
 
-- `docs/design.md` — 唯一规格：架构、宿主协议（§6）、安全模型（§12）、路线图（§15）；
-  事实基线（§2，按本机 `@deepseek-ai/dsh@0.1.2-rc.1` 核验）；**上游破坏性变更台账（§2.1）
-  ——dsh 版本跳变时先查此表，勿重复调查**
+- `docs/design.md` — 设计规格索引；主题正文在 `docs/design/`：事实基线与上游变更台账
+  （§2/§2.1）、宿主协议（§6）、扩展（§8）、安全模型（§12）、路线图（§15）。
+  **dsh 版本跳变时先查 §2.1 台账，勿重复调查**
 - `native-host/test/VERIFICATION.md` — M1 验收报告与已知偏差清单
 - `native-host/test/manual-e2e.md` — 人工验证步骤
 - `CHANGELOG.md` — 里程碑历史档案（Keep a Changelog，M13→M1 完整记录）
 
-**约定：重大改动先改 design.md 再改代码；扩展与宿主间的协议变更必须同步 §6.2 与两处
+**约定：重大改动先改对应主题规格再改代码，新增主题须更新 `docs/design.md` 索引；扩展与宿主间的协议变更必须同步 §6.2 与两处
 实现；改 host.js 必须补跑/新增 smoke 场景。**
 
 ## 目录
@@ -36,11 +36,12 @@
 
 ```powershell
 node --check native-host/host.js                     # 宿主语法检查
-node native-host/test/smoke.js                       # 冒烟测试 29 场景（全模拟，无前置）
+node native-host/test/smoke.js                       # 冒烟测试 30 场景（全模拟，无前置）
 node native-host/test/smoke-real.js                  # 真实 dsh 集成（需 DSH_MANAGER_NPM_PREFIX=%APPDATA%\npm）
 node native-host/test/e2e-m9-manager.js              # M9 真实实例 e2e（真实 profile 插件装配；需 danger-full-access）
 node native-host/test/e2e-rc1-isolated.js            # M13 真实 rc.1 隔离 e2e（临时前缀；见下）
-node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（58 项）
+node --test "plugin\dsh-lifecycle\test\*.test.js"    # dsh-lifecycle 插件单测（66 项）
+node --test native-host/test/readiness.test.js       # 就绪文件校验（3 项）
 powershell -ExecutionPolicy Bypass -File native-host\install.ps1 -DryRun   # 安装预演（Windows）
 sh native-host/install.sh --dry-run                                          # 安装预演（Linux/macOS）
 powershell -ExecutionPolicy Bypass -File tools\linux\verify-linux.ps1 -E2E  # WSL Linux 冒烟 + 真实安装 E2E
@@ -56,11 +57,11 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
 
 | 测试 | 口径 | 运行前提 |
 |---|---|---|
-| `smoke.js` | 29 场景；Windows 372 PASS + 1 SKIP（场景 26 POSIX 专属） | 无（fake-dsh 全模拟；BASE_ENV 进程枚举围栏仅 Windows） |
+| `smoke.js` | 30 场景；Windows 396 PASS + 1 SKIP（场景 26 POSIX 专属） | 无（fake-dsh 全模拟；BASE_ENV 进程枚举围栏仅 Windows） |
 | `smoke-real.js` | 真实 dsh 全链路（start→status→stop + `--port 0`） | `DSH_MANAGER_NPM_PREFIX=%APPDATA%\npm` |
 | `e2e-m9-manager.js` | 7/7 | 真实 profile 插件装配；插件未升级时 SKIP；需 danger-full-access |
-| `e2e-rc1-isolated.js` | 9/9 | 临时前缀 rc.1（缺省 `%TEMP%\dsh-rc1-prefix`，`DSH_MANAGER_NPM_PREFIX` 可覆盖）+ 本地插件方式 B |
-| `lifecycle.test.js` | 58 项 | `node --test` |
+| `e2e-rc1-isolated.js` | 14/14 | 隔离 DSH_HOME + rc.1（缺省 `%TEMP%\dsh-rc1-prefix`，`DSH_MANAGER_NPM_PREFIX` 可覆盖）+ 本地插件方式 B |
+| `lifecycle.test.js` + `readiness.test.js` | 插件 66 项、宿主 3 项 | `node --test` |
 | `verify-cdp.js` | 108 断言 | headless Chrome（沙箱拦 mojo 管道时需 danger-full-access 侧挂）；默认 dsh URL 3080（`VERIFY_DSH_URL` 覆盖） |
 
 > **verify-cdp 覆盖（M13 起）**：真实 rc.1 实例认证引导（探测 401 → 读 run 记录
@@ -78,8 +79,8 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
 - Node ≥ 18；dsh **0.1.2-rc.1** 全局安装（2026-09-04 升级，npm `latest` = rc.1）；默认
   端口 3080
 - **上游 dsh 版本跟踪**：破坏性变更集中登记于 design §2.1 台账，版本跳变先查此表。
-  当前待办 = **M13 二期**：插件写「就绪文件」把存活/端口判定由宿主轮询探测反转为 dsh
-  主动告知（§15.2，需先定协议：文件路径/新鲜度/双信号）
+  **M13 二期已实现**：插件主动报告就绪/端口（§6.9），新鲜文件优先、HTTP 回退。
+  生产插件升级须复制完整 0.4.0 目录并重启实例；本轮只验证隔离实例，未改用户安装。
 - 约束：**任何 dsh HTTP 探测一律不发 `Accept-Encoding`**（0.1.2 起 webserver 默认 gzip）
 - 宿主安装位置 Windows `%LOCALAPPDATA%\dsh-manager\host\`（host.cmd 内是绝对路径，
   **项目移动必须重跑 install.ps1**）；注册表 HKCU：Chrome/Edge/Firefox 的
@@ -110,8 +111,12 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
   修复：popup.css 两处选择器收窄为 `body[data-ds-dark-theme]`（规格值零改动）；
   verify-cdp 新增浅色未选中 cube 令牌一致断言（107→108）。遗留：design §8.7.5
   与 V6 实际数值（l1/8px/28px）漂移待决策。详见 CHANGELOG M13.2。
-- **M13 二期（待办）**：插件写「就绪文件」，存活/端口判定由宿主轮询反转为 dsh 主动
-  告知（§15.2，需先定协议：文件路径/新鲜度/双信号；HTTP 探测保留为无插件回退）。
+- **M13 二期完成（2026-09-21）**：插件 0.4.0 主动发布 starting/ready 文件，等待
+  Loader 完成、2 秒续期、`ctx.effect` 清理；宿主按 launchId/启动时间/PID/10 秒租约校验，
+  fs.watch 唤醒启动、从文件取 PID/动态端口/health，无有效文件时回退 HTTP。见 §6.9。
+  验证：插件 66/66；`node --test native-host/test/readiness.test.js` 3/3；Windows
+  smoke 30 场景 396 PASS / 0 FAIL / 1 SKIP；真实 rc.1 隔离 E2E 14/14。
+  真实 E2E 禁用隔离 profile 自动开浏览器，避免桌面干扰和日志句柄影响连续启动。
 - **已知遗留**：
   - 外部实例（无 run 记录 token）打开 Web UI 仍会 401（回退裸 URL；上游安全模型
     固有限制，design 已标注）

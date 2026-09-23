@@ -6,6 +6,16 @@
 ## [未发布] - M4 跨平台/跨浏览器（进行中）
 
 ### Added
+- **设计规格按主题拆分（2026-09-23）**：`docs/design.md` 改为 21 行索引；原 §1–17
+  内容保留章节编号，分入 `docs/design/` 七篇（架构、宿主、插件、扩展界面、会话、运行、路线图）。
+  开发约定和常用入口已同步，历史 “design §X” 引用可经索引定位。
+- **M13 二期：插件主动就绪信号（2026-09-21，design §6.9）**：dsh-lifecycle 0.4.0
+  在 Loader 完成后发布就绪文件，2 秒续期、10 秒有效，通过 `ctx.effect` 随插件退出清理；
+  宿主绑定每次启动的随机标识与时间并复核 PID/端口，优先读取文件获取状态、实际端口和
+  health，启动等待由目录事件唤醒，无有效文件时兼容原 HTTP 路径。文件不含 token。
+  验证：插件 66/66、宿主文件校验 3/3、Windows smoke 396 PASS / 0 FAIL / 1 SKIP、
+  真实 dsh 0.1.2-rc.1 隔离 E2E 14/14（固定/动态端口、身份匹配、优雅退出与文件清理）。
+  E2E 隔离 profile 关闭自动开浏览器，避免干扰桌面及后续启动日志；扩展 UI 未改动。
 - **M13 上游 0.1.2 认证兼容 + 插件 Session.events 适配（2026-09-04，design §2.1.1/§6.2/§6.3/§8.10/§12.3；本地 dsh-v0.1.2-rc.1 源码逐项复核）**：
   上游 0.1.2 系列已迭代到 `v0.1.2-rc.1`（GitHub release 2026-09-03；**npm 已发 `latest`/`next` = `0.1.2-rc.1`**，2026-09-04 晚核验）。rc.1 源码复核确认：浏览器启动令牌认证闸门**无回环豁免**（`GET /` 无凭据 401）、`/manifest.webmanifest` 为公开静态资产（含指纹）、`Session.events` 数组属性**已移除**（改 `snapshotEvents()` 方法）。
   - **宿主（native-host/host.js）**：`httpProbe` 将 **401 视为就绪**（401 证明 dsh 认证中间件已挂载；rc.2 仍 200 路径，双向兼容）；`httpDshProbe` 指纹端点 `/` → **`/manifest.webmanifest`**（外部发现 / PORT_BUSY 指纹 / adopt 复查同源受益）；启动日志扫描新增捕获完整 `dsh web: <url>` 行（含 token query）→ run 记录与 status result 新增 **`launchUrl`** 字段（`url` 仍为裸 URL 不含 token）；`readLogSince` 抽出两处日志解析共用底座；探测请求确认**不发送 Accept-Encoding**（§2.1.1 B2）。

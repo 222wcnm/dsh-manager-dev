@@ -72,10 +72,12 @@ function makeCtxRaw() {
   const exitCodes = []
   const disposers = []
   const listeners = new Map()
+  const effects = []
   const emit = (name, ...args) => {
     for (const cb of [...(listeners.get(name) || [])]) cb(...args)
   }
   const ctx = {
+    effect(callback) { const dispose = callback(); effects.push(dispose); return dispose },
     get(name) {
       return undefined
     },
@@ -101,7 +103,7 @@ function makeCtxRaw() {
       exitCodes.push(code)
     },
   }
-  return { ctx, routes, disposed, exitCodes, disposers, listeners, emit }
+  return { ctx, routes, disposed, exitCodes, disposers, listeners, emit, effects }
 }
 
 // Fake ctx: webServer (port + register returning a disposer), appExit
@@ -113,6 +115,14 @@ function makeCtx() {
   const cleanup = plugin.apply(base.ctx)
   return { ...base, cleanup }
 }
+
+test('readiness cleanup is registered with Cordis effect lifecycle', () => {
+  const ctx = makeCtx()
+  assert.equal(ctx.effects.length, 1)
+  assert.equal(typeof ctx.effects[0], 'function')
+  ctx.effects[0]()
+  ctx.cleanup()
+})
 
 // Resolve a health request, returning the parsed JSON body (or error marker).
 // The handler is async, so await it before reading the recorded response.

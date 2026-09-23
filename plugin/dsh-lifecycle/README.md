@@ -7,6 +7,14 @@ Windows 上也能优雅停止（否则只能 `taskkill` 硬杀）。
 
 ## 功能
 
+0.4.0 起，Whalekeeper 启动的实例会主动报告就绪状态与实际端口。插件先等待 dsh
+加载完成，再写入宿主指定的 `ready/dsh-web.json`；每 2 秒更新，正常卸载时删除。
+文件仅含启动标识、PID、端口、时间和版本，不含消息或认证 token。手工启动未提供
+宿主环境变量时不创建文件；旧宿主照常使用 HTTP 端点。协议见[宿主设计](../../docs/design/02-native-host.md) §6.9。
+
+升级须复制**完整插件目录**（包括新增的 `readiness.js` 和 `package.json`），再重启
+所管理的 dsh 实例；只替换 `index.js` 会缺少依赖文件。宿主无需重新注册。
+
 | 方法 | 路径 | 响应 | 语义 |
 |------|------|------|------|
 | `POST` | `/_lifecycle/shutdown` | `202 {"ok":true}`（重复请求 `409`） | 先刷出响应，再 `appExit(0)`：优雅 dispose 请求（触发 dsh 官方 fiber dispose，端口随之关闭）；进程退出依赖事件循环自然排空，**不保证必然退出**；DSH Manager 宿主以端口关闭为判定权威，必要时 taskkill 回退 |

@@ -76,6 +76,14 @@ function webUrlLine(actualPort) {
   return 'dsh web: ' + (launchToken === null ? base : base + '/?token=' + launchToken);
 }
 
+// Exercise the actual plugin publisher while making HTTP readiness unusable.
+async function publishReady(actualPort) {
+  if (process.env.DSH_FAKE_READY !== '1') return;
+  const { publishReadiness } = await import('../../plugin/dsh-lifecycle/readiness.js');
+  const dispose = publishReadiness({ webServer: { port: actualPort }, get: () => undefined });
+  process.once('exit', dispose);
+}
+
 // 宿主版本检查：node fake-dsh.js --version
 if (process.argv.includes('--version')) {
   process.stdout.write('0.0.0-fake\n');
@@ -92,6 +100,7 @@ if (port === 0 && !exitImmediately) {
   });
   server.listen(0, '127.0.0.1', () => {
     const actual = server.address().port;
+    void publishReady(actual);
     if (!noUrl) {
       console.log(webUrlLine(actual));
       console.log('fake-dsh listening on 127.0.0.1:' + actual);
@@ -114,6 +123,7 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
+  void publishReady(port);
   console.log('fake-dsh listening on 127.0.0.1:' + port);
 });
 
@@ -121,6 +131,11 @@ server.listen(port, '127.0.0.1', () => {
 function respond(actualPort, req, res) {
   if (logHeaders) {
     console.log(`FAKE-REQ ${req.method} ${req.url} ae=${req.headers['accept-encoding'] ?? 'ABSENT'}`);
+  }
+  if (process.env.DSH_FAKE_READY === '1' && req.url === '/') {
+    res.writeHead(503);
+    res.end('HTTP readiness deliberately unavailable');
+    return;
   }
   if (!noLifecycle && req.method === 'GET' && req.url === '/_lifecycle/health') {
     res.writeHead(200, { 'content-type': 'application/json' });

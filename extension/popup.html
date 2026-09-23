@@ -47,6 +47,15 @@
           <span id="port-text" class="brand-tag" title="点击复制服务地址">3080</span>
         </header>
 
+        <!-- 待重启提示微横幅（配置变更且正在运行时展示） -->
+        <div id="restart-pending-banner" class="restart-pending-banner hidden" role="status">
+          <div class="rpb-content">
+            <span class="rpb-dot" aria-hidden="true"></span>
+            <span id="rpb-text" class="rpb-text">配置已变更，需重启生效</span>
+          </div>
+          <button type="button" id="btn-banner-restart" class="rpb-btn">立即重启</button>
+        </div>
+
         <!-- 状态卡 (运行中 / 健康度 / PID / uptime) -->
         <div id="statuscard" class="statuscard">
           <div class="sc-row1">
@@ -151,6 +160,24 @@
             <div class="s-field-row">
               <span>服务端口</span>
               <input id="set-port" class="s-field-input" type="number" min="0" max="65535" step="1" value="3080" style="width:68px">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <div class="s-field-row">
+                <span>启动方式</span>
+                <select id="set-launch-mode" class="s-field-input s-field-select" style="width:116px">
+                  <option value="global">全局安装 (dsh)</option>
+                  <option value="npx">NPX 免安装</option>
+                  <option value="source">本地源码路径</option>
+                </select>
+              </div>
+              <div id="set-launch-desc" class="s-field-desc">使用本地全局安装的 dsh 命令行启动</div>
+            </div>
+            <div id="set-source-wrap" class="hidden" style="display:flex;flex-direction:column;gap:3px">
+              <div class="s-field-row">
+                <span>源码 / 脚本路径</span>
+                <input id="set-custom-path" class="s-field-input" type="text" placeholder="例如 D:\deepseek-harness" style="width:140px">
+              </div>
+              <div class="s-field-desc">本地仓库根目录（含 lib/bin.js）或指定 bin.js 路径</div>
             </div>
             <div style="display:flex;flex-direction:column;gap:3px">
               <div class="s-field-row">

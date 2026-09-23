@@ -19,6 +19,8 @@
 // The webserver dispatches `await route.handler(req, res)`; a handled exact
 // route answers before the SPA fallback, so these paths never hit `/api`.
 
+import { publishReadiness } from './readiness.js'
+
 export const name = 'dsh-lifecycle'
 export const inject = ['webServer', 'appExit']
 
@@ -612,7 +614,10 @@ export function apply(ctx) {
     },
   ]
 
+  const disposeReadiness = publishReadiness(ctx)
+  ctx.effect(() => disposeReadiness)
   return () => {
+    disposeReadiness()
     for (const d of dispose) d()
   }
 }
