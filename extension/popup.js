@@ -1063,11 +1063,12 @@ function renderRestartBanner() {
   const curPath = detail.customPath || '';
   const cfgPath = (settings && settings.customPath) || '';
   const curPort = detail.port;
+  const curRequestedPort = detail.requestedPort === 0 ? 0 : curPort;
   const cfgPort = settings && settings.port;
 
   const modeDiff = curMode !== cfgMode;
   const pathDiff = cfgMode === 'source' && curPath !== cfgPath;
-  const portDiff = Number.isInteger(cfgPort) && cfgPort > 0 && curPort !== cfgPort;
+  const portDiff = Number.isInteger(cfgPort) && curRequestedPort !== cfgPort;
 
   if (modeDiff || pathDiff || portDiff) {
     const modeNames = { global: '全局', npx: 'NPX', source: '本地源码' };
@@ -1078,7 +1079,9 @@ function renderRestartBanner() {
       } else if (pathDiff) {
         rpbText.textContent = '源码路径已修改，需重启生效';
       } else if (portDiff) {
-        rpbText.textContent = `端口已修改（当前:${curPort} → 新选:${cfgPort}），需重启生效`;
+        const oldPort = curRequestedPort === 0 ? '自动分配' : curRequestedPort;
+        const newPort = cfgPort === 0 ? '自动分配' : cfgPort;
+        rpbText.textContent = `端口已修改（当前:${oldPort} → 新选:${newPort}），需重启生效`;
       }
     }
     banner.classList.remove('hidden');
