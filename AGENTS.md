@@ -36,7 +36,7 @@
 
 ```powershell
 node --check native-host/host.js                     # 宿主语法检查
-node native-host/test/smoke.js                       # 冒烟测试 30 场景（全模拟，无前置）
+node native-host/test/smoke.js                       # 冒烟测试 31 场景（全模拟，无前置）
 node native-host/test/smoke-real.js                  # 真实 dsh 集成（需 DSH_MANAGER_NPM_PREFIX=%APPDATA%\npm）
 node native-host/test/e2e-m9-manager.js              # M9 真实实例 e2e（真实 profile 插件装配；需 danger-full-access）
 node native-host/test/e2e-rc1-isolated.js            # M13 真实 rc.1 隔离 e2e（临时前缀；见下）
@@ -57,7 +57,7 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
 
 | 测试 | 口径 | 运行前提 |
 |---|---|---|
-| `smoke.js` | 30 场景；Windows 396 PASS + 1 SKIP（场景 26 POSIX 专属） | 无（fake-dsh 全模拟；BASE_ENV 进程枚举围栏仅 Windows） |
+| `smoke.js` | 31 场景；Windows 400 PASS + 1 SKIP（场景 26 POSIX 专属） | 无（fake-dsh 全模拟；BASE_ENV 进程枚举围栏仅 Windows） |
 | `smoke-real.js` | 真实 dsh 全链路（start→status→stop + `--port 0`） | `DSH_MANAGER_NPM_PREFIX=%APPDATA%\npm` |
 | `e2e-m9-manager.js` | 7/7 | 真实 profile 插件装配；插件未升级时 SKIP；需 danger-full-access |
 | `e2e-rc1-isolated.js` | 14/14 | 隔离 DSH_HOME + rc.1（缺省 `%TEMP%\dsh-rc1-prefix`，`DSH_MANAGER_NPM_PREFIX` 可覆盖）+ 本地插件方式 B |
@@ -117,6 +117,12 @@ node tools/verify-ui/verify-ui.js --list             # MCP 路径诊断（chrome
   验证：插件 66/66；`node --test native-host/test/readiness.test.js` 3/3；Windows
   smoke 30 场景 396 PASS / 0 FAIL / 1 SKIP；真实 rc.1 隔离 E2E 14/14。
   真实 E2E 禁用隔离 profile 自动开浏览器，避免桌面干扰和日志句柄影响连续启动。
+- **本地源码模式与 SSH MCP（2026-09-23）**：本机 `D:\deepseek-harness` 为
+  `0.1.6-alpha.1`，须先在 clone 中执行 `pnpm install --frozen-lockfile` 与
+  `pnpm run build`；未构建时缺 `lib/index.js`。用户选择仅在 source 启动时用宿主生成的
+  `run/source-no-ssh.patch.yml` 禁用 profile 的 `mcp-ssh`，不改真实 profile，global/NPX
+  模式保持原行为。真实 profile 原样启动约 82s，禁用该项约 19s；隔离 source + 插件 E2E
+  start/status/stop 全过。Windows smoke 更新为 31 场景 400 PASS / 0 FAIL / 1 SKIP。
 - **已知遗留**：
   - 外部实例（无 run 记录 token）打开 Web UI 仍会 401（回退裸 URL；上游安全模型
     固有限制，design 已标注）

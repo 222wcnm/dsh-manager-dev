@@ -1351,6 +1351,24 @@ async function scenarioReadiness() {
   }
 }
 
+// Source mode passes a fixed, host-owned patch before Web runtime flags.
+async function scenarioSourceOverlay() {
+  const port = 31931;
+  const response = runHost({ id: 'source-start', action: 'start', payload: {
+    port, launchMode: 'source', customPath: FAKE_DSH,
+  } }, 'source-start', { DSH_BIN_STUB: '' });
+  expect(response?.ok && response.result.state === 'running',
+    '31 source 模式可从指定脚本启动', JSON.stringify(response && response.error));
+  const patchFile = path.join(BASE, 'run', 'source-no-ssh.patch.yml');
+  expect(fs.readFileSync(patchFile, 'utf8') === '- id: mcp-ssh\n  disabled: true\n',
+    '31 覆盖文件只禁用 mcp-ssh');
+  const record = readRunFile();
+  expect(record?.cmdline.includes('--profile web --patch ' + patchFile + ' --host 127.0.0.1'),
+    '31 --patch 位于 Web 参数之前', record && record.cmdline);
+  const stop = runHost({ id: 'source-stop', action: 'stop' }, 'source-stop');
+  expect(stop?.ok && stop.result.state === 'stopped', '31 source 模式可停止');
+}
+
 // 主流程
 // ---------------------------------------------------------------------------
 async function main() {
@@ -1411,6 +1429,8 @@ async function main() {
   try { await scenarioAuthCompat(); } catch (e) { console.log('  场景 29 异常:', e.message); }
   cleanup();
   try { await scenarioReadiness(); } catch (e) { record('readiness', '场景 30 异常', false, e.message); }
+  cleanup();
+  try { await scenarioSourceOverlay(); } catch (e) { record('source', '场景 31 异常', false, e.message); }
   cleanup();
 
   const failed = results.filter((r) => !r.ok);

@@ -111,7 +111,7 @@ const READY_DIR = path.join(BASE_DIR, 'ready');
 const READY_FILE = path.join(READY_DIR, 'dsh-web.json');
 
 // Plugin-owned readiness lease (design §6.9); never accept a path from a request/run record.
-function readReadiness(expected) {
+function readReadiness(expected, skipPidCommandCheck = false) {
   if (!expected || !/^[a-f0-9]{32}$/.test(expected.launchId || '')
     || !Number.isSafeInteger(expected.launchStartedAt)) return null;
   try {
@@ -129,7 +129,8 @@ function readReadiness(expected) {
       || !Number.isSafeInteger(signal.updatedAt) || signal.updatedAt < expected.launchStartedAt
       || now - signal.updatedAt > 10000 || signal.updatedAt > now + 2000
       || typeof signal.pluginVersion !== 'string' || typeof signal.nodeVersion !== 'string'
-      || !pidAlive(signal.pid) || !pidLooksLikeDsh(signal.pid, expected.binPath)) return null;
+      || !pidAlive(signal.pid)
+      || (!skipPidCommandCheck && !pidLooksLikeDsh(signal.pid, expected.binPath))) return null;
     return signal;
   } catch (_) { return null; }
 }
@@ -1149,6 +1150,19 @@ const VBS_LAUNCH_SOURCE = [
 // ---------------------------------------------------------------------------
 // 启动规格解析（支持 global / npx / source 三种启动方式）
 // ---------------------------------------------------------------------------
+function sourceProfileOverlay() {
+  const file = path.join(RUN_DIR, 'source-no-ssh.patch.yml');
+  const content = '- id: mcp-ssh\n  disabled: true\n';
+  try {
+    fs.mkdirSync(RUN_DIR, { recursive: true });
+    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === content) return file;
+    fs.writeFileSync(file, content, { encoding: 'utf8', mode: 0o600 });
+  } catch (err) {
+    throw new AppError('INTERNAL', '无法准备本地源码启动覆盖文件: ' + (err && err.message));
+  }
+  return file;
+}
+
 function resolveLaunchSpec(v) {
   const mode = (v && v.launchMode) || 'global';
   // a. DSH_BIN_STUB（测试用，直接替代真实 bin.js；仅 TEST_MODE 生效）
@@ -1242,7 +1256,8 @@ function resolveLaunchSpec(v) {
     }
     return {
       exe: process.execPath,
-      args: [targetBin, '--profile', v.profile, '--host', v.host, '--port', String(v.port), ...v.extraArgs],
+      args: [targetBin, '--profile', v.profile, '--patch', sourceProfileOverlay(),
+        '--host', v.host, '--port', String(v.port), ...v.extraArgs],
       binPath: targetBin,
       version: getDshVersion(targetBin),
       launchMode: mode,
@@ -1598,18 +1613,26 @@ function validateStartPayload(payload) {
 // ---------------------------------------------------------------------------
 // 状态判定（design §5 / §6.3 status / §6.6 外部实例发现）
 // ---------------------------------------------------------------------------
-async function computeStatus() {
+async function computeStatus(fastReadiness = false) {
   const rec = readRunRecord();
   let readiness;
   if (rec) {
     if (!pidAlive(rec.pid)) {
       log('run 记录指向的 PID 不存在，清理残留记录');
       removeRunRecordSafe();
+    } else if (fastReadiness && (readiness = readReadiness(rec, true))) {
+      // 只读 status：新鲜租约已绑定本次启动的 ID、PID 与端口，无须每轮启动 tasklist。
+      if (rec.port === 0) {
+        rec.port = readiness.port;
+        rec.launchUrl = discoverLaunchUrlFromLog(rec.logStartBytes);
+        writeRunRecord(rec);
+      }
+      return { state: readiness.state === 'ready' ? 'running' : 'starting', rec, readiness };
     } else if (!pidLooksLikeDsh(rec.pid, rec.binPath)) {
       // 可选 PID 校验：命令行不含 dsh/bin 关键字，疑似 PID 复用，清记录防误判
       log('PID 校验未通过（疑似 PID 复用），清理残留记录');
       removeRunRecordSafe();
-    } else if ((readiness = readReadiness(rec))) {
+    } else if ((readiness = readReadiness(rec, true))) {
       if (rec.port === 0) {
         rec.port = readiness.port;
         rec.launchUrl = discoverLaunchUrlFromLog(rec.logStartBytes);
@@ -1693,7 +1716,7 @@ async function actionPing() {
 }
 
 async function actionStatus() {
-  const { state, rec, external, readiness } = await computeStatus();
+  const { state, rec, external, readiness } = await computeStatus(true);
   const result = buildResult(state, rec, external);
   if (state === 'running' && readiness) {
     result.lifecycle = true;

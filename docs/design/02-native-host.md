@@ -104,8 +104,9 @@
 
 **status**
 
-M13 二期优先规则：步骤 2/3 通过后先检查 §6.9 就绪文件；有效 ready 直接返回 running
-与文件内 health，starting 返回 starting；只有无有效文件时才执行下面的 HTTP 回退。
+M13 二期优先规则：有效就绪文件（§6.9）直接返回 running 与文件内 health，starting
+返回 starting；无有效文件时执行下面的 HTTP 回退。只读 status 对新鲜、身份匹配的就绪
+文件跳过 Windows 进程命令查询；停止、重启等管理动作仍执行 PID 复用校验。
 
 1. 读 `run\dsh-web.json`；不存在 → 执行外部实例发现（§6.6）：发现则返回 `external`（附 `source:"external"`、真实 pid/port/url 与 `externalCount`），否则 `stopped`（顺带清理孤儿 pid 文件）。
 2. `process.kill(pid, 0)` 判定存活；已死 → 清理记录 → 同第 1 步执行外部实例发现。
@@ -189,7 +190,8 @@ M13 二期优先规则：步骤 2/3 通过后先检查 §6.9 就绪文件；有�
    - 命令行：`npx -y @deepseek-ai/dsh web --profile <profile> --host 127.0.0.1 --port <port> [extraArgs...]`（必须显式携带 `-y` 防止首次无缓存时触发交互确认挂死）。
 3. **`source` 本地源码 / 脚本路径模式**：
    - 针对开发者本地 `git clone` 场景：解析 `customPath`，若为文件直接使用；若为目录，自动探测其下的 `lib/bin.js`、`bin.js`、`packages/cli/lib/bin.js` 等入口。
-   - 校验文件存在后以 `process.execPath` 直接执行，启动本地最新源码。
+   - 校验文件存在后以 `process.execPath` 直接执行，启动本地最新源码。源码仓库须先按上游 README 执行 `pnpm install`、`pnpm run build`；只有入口文件存在不足以证明其 workspace 依赖和 `lib/` 产物齐全。
+   - **本地 clone 专属覆盖（2026-09-23 用户选择）**：宿主在自身 `run/` 下生成固定的 `source-no-ssh.patch.yml`（仅 `mcp-ssh: disabled: true`），以 launcher 参数 `--patch <绝对路径>` 放在 `--host/--port` 前。仅 source 模式应用；不修改 `$DSH_HOME/profiles/web/cordis.patch.yml`，全局与 NPX 模式照常加载 SSH MCP。原因：当前真实 profile 的 `mcp-ssh` 经 `npx` 启动会使 0.1.6-alpha.1 clone 的 Web 就绪等待延长到约 82 秒，超过宿主 30 秒上限；一次性覆盖实测约 19 秒就绪。
 
 ### 6.5 状态文件布局
 
@@ -291,8 +293,10 @@ state:'starting'|'ready', startedAt, updatedAt, pluginVersion, nodeVersion}`。`
 `webServer.port` 的实际非零端口。相邻临时文件 + rename 原子替换，每 2 秒续期，计时器
 unref；清理器仅删除自身 mount 写出的文件，dispose 后不得再次发布。写失败不影响 dsh。
 
-宿主只接受 ≤8 KiB、结构合法、启动标识与启动时间匹配、PID 存活且符合既有进程校验、
+宿主只接受 ≤8 KiB、结构合法、启动标识与启动时间匹配、PID 存活、
 固定端口匹配（动态端口可回填）、updatedAt 在过去 10 秒内（未来容差 2 秒）的记录。
+只读 status 在这些条件成立时跳过耗时的进程命令查询；start/stop/restart 等管理路径
+继续执行既有进程校验，且在已验证同一 PID 后不重复查询。
 run 记录保存 launchId/launchStartedAt 供后续独立 native 调用复核，不保存任意就绪路径。
 ready 优先于 HTTP；starting 不被 HTTP 成功覆盖。缺失、过期、损坏或不匹配时走原 HTTP
 回退，**文件消失不等于 stopped**（插件热卸载、写失败、旧插件均可能无文件）。PID 死亡

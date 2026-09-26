@@ -1628,8 +1628,11 @@ async function main() {
   })()`);
   let m13o = {};
   try { m13o = JSON.parse(m13Open); } catch (_) { /* 保持默认 */ }
-  record('M13：openWebUI 有 launchUrl 时新建标签用 launchUrl（深链 hash 保留）',
-    m13o.withLaunch === 'http://127.0.0.1:3080/?token=abc123/#/chat/xyz', JSON.stringify(m13o));
+  let m13Launch = null;
+  try { m13Launch = new URL(m13o.withLaunch); } catch (_) { /* 保持默认 */ }
+  record('M13：openWebUI 新标签令牌不变且深链 hash 保留',
+    m13Launch?.searchParams.get('token') === 'abc123'
+      && m13Launch.hash === '#/chat/xyz', JSON.stringify(m13o));
   record('M13：openWebUI 无 launchUrl 时回退裸 URL',
     m13o.bare === 'http://127.0.0.1:3080', JSON.stringify(m13o));
 

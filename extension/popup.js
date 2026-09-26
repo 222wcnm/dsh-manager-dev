@@ -904,7 +904,9 @@ async function openWebUI(targetPath) {
   const launchBase = (detail && typeof detail.launchUrl === 'string' && detail.launchUrl.length > 0)
     ? detail.launchUrl
     : bareUrl;
-  const targetUrl = pathSuffix === '/' ? launchBase : launchBase + pathSuffix;
+  const launchTarget = new URL(launchBase);
+  if (pathSuffix !== '/') launchTarget.hash = pathSuffix.slice(1);
+  const targetUrl = pathSuffix === '/' ? launchBase : launchTarget.href;
   // 已有标签（已换取 cookie、URL 干净）的复用/跳转仍用裸 URL（避免重复走
   // token 兑换重定向）
   const bareTargetUrl = pathSuffix === '/' ? bareUrl : bareUrl + pathSuffix;
@@ -1390,7 +1392,7 @@ function loadReadSessions() {
 const LAUNCH_MODE_DESCS = {
   global: '使用本地全局安装的 dsh 命令行启动',
   npx: '使用 npx @deepseek-ai/dsh 启动（免全局安装）',
-  source: '使用本地源码仓库（如 git clone）或指定 bin.js 启动',
+  source: '从本地已构建源码启动；此模式暂不加载 SSH MCP',
 };
 
 function updateLaunchModeUI() {
